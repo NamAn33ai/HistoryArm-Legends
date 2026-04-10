@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arm Legends — History Quiz Battle</title>
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --p1: #3B82F6;
+    --p1-dark: #1D4ED8;
+    --p1-light: #DBEAFE;
+    --p2: #EF4444;
+    --p2-dark: #B91C1C;
+    --p2-light: #FEE2E2;
+    --gold: #F59E0B;
+    --bg: #0F172A;
+    --surface: #1E293B;
+    --surface2: #2D3A4F;
+    --text: #F1F5F9;
+    --muted: #94A3B8;
+    --radius: 14px;
+    --max-level: 5;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Nunito', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-x: hidden;
+  }
+
+  /* Stars background */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      radial-gradient(1px 1px at 10% 15%, rgba(255,255,255,0.5) 0%, transparent 100%),
+      radial-gradient(1px 1px at 30% 60%, rgba(255,255,255,0.3) 0%, transparent 100%),
+      radial-gradient(1px 1px at 55% 25%, rgba(255,255,255,0.4) 0%, transparent 100%),
+      radial-gradient(1px 1px at 75% 80%, rgba(255,255,255,0.3) 0%, transparent 100%),
+      radial-gradient(1px 1px at 88% 40%, rgba(255,255,255,0.5) 0%, transparent 100%),
+      radial-gradient(1px 1px at 20% 85%, rgba(255,255,255,0.2) 0%, transparent 100%),
+      radial-gradient(1px 1px at 65% 55%, rgba(255,255,255,0.3) 0%, transparent 100%),
+      radial-gradient(1px 1px at 42% 90%, rgba(255,255,255,0.4) 0%, transparent 100%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; width: 100%; max-width: 780px; padding: 0 16px 40px; }
+
+  /* HEADER */
+  header {
+    text-align: center;
+    padding: 28px 0 16px;
+  }
+  header h1 {
+    font-family: 'Bangers', cursive;
+    font-size: clamp(36px, 8vw, 62px);
+    letter-spacing: 3px;
+    line-height: 1;
+    color: var(--gold);
+    text-shadow: 3px 3px 0 #92400E, 0 0 30px rgba(245,158,11,0.5);
+  }
+  header p {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 6px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* ARENA */
+  .arena {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: end;
+    gap: 8px;
+    padding: 16px 0 8px;
+  }
+  .fighter {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    transition: transform 0.3s ease;
+  }
+  .fighter.p2 { transform: scaleX(-1); }
+  .fighter.p2 .fighter-name, .fighter.p2 .level-label { transform: scaleX(-1); }
+  .fighter-name {
+    font-family: 'Bangers', cursive;
+    font-size: 22px;
+    letter-spacing: 2px;
+  }
+  .p1 .fighter-name { color: var(--p1); }
+  .p2 .fighter-name { color: var(--p2); }
+  .level-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .fighter canvas { display: block; }
+
+  /* Progress bar */
+  .prog-wrap {
+    width: 100%;
+    max-width: 130px;
+  }
+  .prog-track {
+    height: 10px;
+    background: var(--surface2);
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.07);
+  }
+  .prog-fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.5s cubic-bezier(.34,1.56,.64,1);
+  }
+  .p1 .prog-fill { background: linear-gradient(90deg, var(--p1-dark), var(--p1)); }
+  .p2 .prog-fill { background: linear-gradient(90deg, var(--p2-dark), var(--p2)); }
+
+  /* VS */
+  .vs-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 20px;
+  }
+  .vs-badge {
+    font-family: 'Bangers', cursive;
+    font-size: 28px;
+    letter-spacing: 2px;
+    color: var(--gold);
+    text-shadow: 2px 2px 0 #92400E;
+  }
+  #turn-pill {
+    background: var(--surface2);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 99px;
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    white-space: nowrap;
+    transition: background 0.3s, color 0.3s;
+  }
+
+  /* QUESTION CARD */
+  .q-card {
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: var(--radius);
+    padding: 22px 22px 18px;
+    margin-top: 12px;
+  }
+  .q-category {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 10px;
+  }
+  .q-text {
+    font-size: clamp(15px, 3vw, 18px);
+    font-weight: 700;
+    line-height: 1.4;
+    color: var(--text);
+    margin-bottom: 18px;
+  }
+  .answers {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .ans-btn {
+    background: var(--surface2);
+    border: 1.5px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-family: 'Nunito', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s ease;
+    line-height: 1.3;
+  }
+  .ans-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.1);
+    border-color: rgba(255,255,255,0.2);
+    transform: translateY(-2px);
+  }
+  .ans-btn.correct {
+    background: rgba(34,197,94,0.2);
+    border-color: #22C55E;
+    color: #86EFAC;
+  }
+  .ans-btn.wrong {
+    background: rgba(239,68,68,0.15);
+    border-color: #EF4444;
+    color: #FCA5A5;
+  }
+  .ans-btn:disabled { cursor: default; transform: none; }
+
+  /* FEEDBACK */
+  #feedback {
+    text-align: center;
+    font-size: 15px;
+    font-weight: 800;
+    min-height: 28px;
+    padding: 10px 0 4px;
+    letter-spacing: 0.5px;
+    transition: color 0.3s;
+  }
+
+  /* NEXT BUTTON */
+  #next-btn {
+    display: none;
+    margin: 10px auto 0;
+    padding: 12px 32px;
+    font-family: 'Bangers', cursive;
+    font-size: 20px;
+    letter-spacing: 2px;
+    background: var(--gold);
+    color: #1c1000;
+    border: none;
+    border-radius: 99px;
+    cursor: pointer;
+    box-shadow: 0 4px 0 #92400E;
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+  #next-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 0 #92400E; }
+  #next-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #92400E; }
+
+  /* WIN SCREEN */
+  #win-screen {
+    display: none;
+    text-align: center;
+    padding: 40px 20px;
+    animation: fadeIn 0.5s ease;
+  }
+  #win-screen .trophy { font-size: 72px; margin-bottom: 10px; }
+  #win-title {
+    font-family: 'Bangers', cursive;
+    font-size: clamp(40px, 10vw, 72px);
+    letter-spacing: 4px;
+    line-height: 1;
+    text-shadow: 3px 3px 0 rgba(0,0,0,0.5);
+    margin-bottom: 12px;
+  }
+  #win-desc {
+    font-size: 16px;
+    color: var(--muted);
+    max-width: 360px;
+    margin: 0 auto 28px;
+    line-height: 1.5;
+  }
+  #restart-btn {
+    font-family: 'Bangers', cursive;
+    font-size: 24px;
+    letter-spacing: 2px;
+    background: var(--gold);
+    color: #1c1000;
+    border: none;
+    border-radius: 99px;
+    padding: 14px 40px;
+    cursor: pointer;
+    box-shadow: 0 5px 0 #92400E;
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+  #restart-btn:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #92400E; }
+  #restart-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #92400E; }
+
+  /* Punch animation */
+  @keyframes flyAway {
+    0%   { transform: scaleX(-1) translateX(0) rotate(0) scale(1); opacity: 1; }
+    100% { transform: scaleX(-1) translateX(320px) rotate(40deg) scale(0.4); opacity: 0; }
+  }
+  @keyframes flyAwayLeft {
+    0%   { transform: translateX(0) rotate(0) scale(1); opacity: 1; }
+    100% { transform: translateX(-320px) rotate(-40deg) scale(0.4); opacity: 0; }
+  }
+  @keyframes punchOut {
+    0%   { transform: scale(1); }
+    20%  { transform: scale(1.15); }
+    100% { transform: scale(1); }
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+  @keyframes popIn  { 0% { transform: scale(0.7); opacity: 0; } 70% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
+
+  .bounce { animation: popIn 0.4s cubic-bezier(.34,1.56,.64,1) forwards; }
+
+  /* Pulse ring on active player */
+  .active-fighter canvas {
+    filter: drop-shadow(0 0 10px currentColor);
+  }
+  .p1.active-fighter canvas { color: var(--p1); }
+  .p2.active-fighter canvas { color: var(--p2); }
+
+  @media (max-width: 480px) {
+    .answers { grid-template-columns: 1fr; }
+    .arena { gap: 4px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>ARM LEGENDS</h1>
+    <p>History Quiz Battle</p>
+  </header>
+
+  <div id="game-wrap">
+    <div class="arena">
+      <div class="fighter p1 active-fighter" id="p1-fighter">
+        <div class="fighter-name">PLAYER 1</div>
+        <canvas id="p1-canvas" width="130" height="190"></canvas>
+        <div class="prog-wrap">
+          <div class="prog-track"><div class="prog-fill" id="p1-fill" style="width:0%"></div></div>
+        </div>
+        <div class="level-label" id="p1-level">Level 0 / 5</div>
+      </div>
+
+      <div class="vs-col">
+        <div class="vs-badge">VS</div>
+        <div id="turn-pill">P1 Turn</div>
+      </div>
+
+      <div class="fighter p2" id="p2-fighter">
+        <div class="fighter-name">PLAYER 2</div>
+        <canvas id="p2-canvas" width="130" height="190"></canvas>
+        <div class="prog-wrap">
+          <div class="prog-track"><div class="prog-fill" id="p2-fill" style="width:0%"></div></div>
+        </div>
+        <div class="level-label" id="p2-level">Level 0 / 5</div>
+      </div>
+    </div>
+
+    <div class="q-card" id="q-card">
+      <div class="q-category" id="q-category">History</div>
+      <div class="q-text" id="q-text">Loading question...</div>
+      <div class="answers" id="answers"></div>
+    </div>
+
+    <div id="feedback"></div>
+    <div style="text-align:center"><button id="next-btn">Next Question ›</button></div>
+  </div>
+
+  <div id="win-screen">
+    <div class="trophy">🏆</div>
+    <div id="win-title">Player 1 Wins!</div>
+    <div id="win-desc">Their arms grew to legendary size and punched the opponent into orbit!</div>
+    <button id="restart-btn">Play Again!</button>
+  </div>
+</div>
+
+<script>
+const MAX_LEVEL = 5;
+const questions = [
+  // Founding Era
+  { q: "Who wrote the Declaration of Independence?", a: ["George Washington","Benjamin Franklin","Thomas Jefferson","John Adams"], c: 2, cat: "Founding Era" },
+  { q: "In what year was the Declaration of Independence signed?", a: ["1774","1775","1776","1777"], c: 2, cat: "Founding Era" },
+  { q: "Who was the first President of the United States?", a: ["John Adams","Thomas Jefferson","George Washington","James Madison"], c: 2, cat: "Founding Era" },
+  { q: "How many original colonies signed the Declaration of Independence?", a: ["11","12","13","14"], c: 2, cat: "Founding Era" },
+  { q: "The Constitutional Convention was held in which city?", a: ["Boston","New York","Philadelphia","Richmond"], c: 2, cat: "Founding Era" },
+  { q: "Who is known as the 'Father of the Constitution'?", a: ["Alexander Hamilton","George Washington","Thomas Jefferson","James Madison"], c: 3, cat: "Founding Era" },
+  { q: "The first ten amendments to the Constitution are called what?", a: ["The Articles of Confederation","The Bill of Rights","The Federalist Papers","The Magna Carta"], c: 1, cat: "Founding Era" },
+  { q: "Who was the second President of the United States?", a: ["Thomas Jefferson","James Madison","John Adams","Alexander Hamilton"], c: 2, cat: "Founding Era" },
+  { q: "What document preceded the Constitution as the first governing document of the US?", a: ["The Mayflower Compact","The Bill of Rights","The Articles of Confederation","The Federalist Papers"], c: 2, cat: "Founding Era" },
+  { q: "Which battle is considered the turning point of the American Revolution?", a: ["Battle of Bunker Hill","Battle of Saratoga","Battle of Yorktown","Battle of Trenton"], c: 1, cat: "Founding Era" },
+  // Colonial America
+  { q: "The Pilgrims arrived in America on which ship?", a: ["Santa Maria","Mayflower","Pinta","Discovery"], c: 1, cat: "Colonial America" },
+  { q: "In what year did the Pilgrims land at Plymouth Rock?", a: ["1607","1612","1620","1630"], c: 2, cat: "Colonial America" },
+  { q: "Which was the first permanent English settlement in America?", a: ["Plymouth","Boston","Jamestown","Roanoke"], c: 2, cat: "Colonial America" },
+  { q: "The Boston Tea Party took place in which year?", a: ["1770","1773","1775","1776"], c: 1, cat: "Colonial America" },
+  { q: "What was the rallying cry of the American colonists against British taxation?", a: ["Give me liberty or give me death","No taxation without representation","Don't tread on me","United we stand"], c: 1, cat: "Colonial America" },
+  { q: "Which colonist said 'Give me liberty, or give me death!'?", a: ["Samuel Adams","John Hancock","Paul Revere","Patrick Henry"], c: 3, cat: "Colonial America" },
+  { q: "Paul Revere's midnight ride warned colonists that the British were coming to which towns?", a: ["Boston and Salem","Lexington and Concord","Plymouth and Providence","Hartford and New Haven"], c: 1, cat: "Colonial America" },
+  { q: "What was the name of the first representative assembly in colonial America?", a: ["Continental Congress","House of Burgesses","Mayflower Compact","Colonial Assembly"], c: 1, cat: "Colonial America" },
+  // Civil War
+  { q: "Which President issued the Emancipation Proclamation?", a: ["Ulysses S. Grant","Andrew Johnson","Abraham Lincoln","James Buchanan"], c: 2, cat: "Civil War" },
+  { q: "In what year did the American Civil War begin?", a: ["1858","1859","1860","1861"], c: 3, cat: "Civil War" },
+  { q: "Which Confederate general surrendered to end the Civil War?", a: ["Stonewall Jackson","Jefferson Davis","Robert E. Lee","James Longstreet"], c: 2, cat: "Civil War" },
+  { q: "Where did the Civil War's final major surrender take place?", a: ["Richmond, Virginia","Appomattox Court House","Gettysburg","Fort Sumter"], c: 1, cat: "Civil War" },
+  { q: "The Battle of Gettysburg took place in which state?", a: ["Virginia","Maryland","Pennsylvania","Ohio"], c: 2, cat: "Civil War" },
+  { q: "Who was the President of the Confederate States of America?", a: ["Robert E. Lee","Jefferson Davis","John C. Calhoun","Stonewall Jackson"], c: 1, cat: "Civil War" },
+  { q: "The Civil War began with an attack on which fort?", a: ["Fort Knox","Fort McHenry","Fort Sumter","Fort Ticonderoga"], c: 2, cat: "Civil War" },
+  { q: "Which amendment abolished slavery in the United States?", a: ["13th","14th","15th","16th"], c: 0, cat: "Civil War" },
+  { q: "The Gettysburg Address was delivered in which year?", a: ["1861","1862","1863","1864"], c: 2, cat: "Civil War" },
+  { q: "Which battle had the highest casualties of the entire Civil War?", a: ["Bull Run","Antietam","Gettysburg","Chickamauga"], c: 2, cat: "Civil War" },
+  // Presidents
+  { q: "Who was the 16th President of the United States?", a: ["Andrew Jackson","James Polk","Abraham Lincoln","Ulysses S. Grant"], c: 2, cat: "Presidents" },
+  { q: "Which President served the longest term in US history?", a: ["Woodrow Wilson","Harry Truman","Franklin D. Roosevelt","Dwight Eisenhower"], c: 2, cat: "Presidents" },
+  { q: "Who was the youngest person elected President of the United States?", a: ["Theodore Roosevelt","Bill Clinton","John F. Kennedy","Barack Obama"], c: 2, cat: "Presidents" },
+  { q: "Which President signed the Louisiana Purchase?", a: ["George Washington","John Adams","Thomas Jefferson","James Madison"], c: 2, cat: "Presidents" },
+  { q: "Who was the first Vice President to become President upon the death of the President?", a: ["John Tyler","Millard Fillmore","Andrew Johnson","Chester Arthur"], c: 0, cat: "Presidents" },
+  { q: "Which President is on the $100 bill?", a: ["Abraham Lincoln","George Washington","Benjamin Franklin","Alexander Hamilton"], c: 2, cat: "Presidents" },
+  { q: "Who was President during the Cuban Missile Crisis?", a: ["Dwight Eisenhower","John F. Kennedy","Lyndon B. Johnson","Richard Nixon"], c: 1, cat: "Presidents" },
+  { q: "Which President resigned from office?", a: ["Lyndon B. Johnson","Gerald Ford","Richard Nixon","Jimmy Carter"], c: 2, cat: "Presidents" },
+  { q: "Who was the first African-American President of the United States?", a: ["Jesse Jackson","Colin Powell","Barack Obama","Thurgood Marshall"], c: 2, cat: "Presidents" },
+  { q: "Which President delivered the 'New Deal' programs?", a: ["Woodrow Wilson","Herbert Hoover","Franklin D. Roosevelt","Harry Truman"], c: 2, cat: "Presidents" },
+  // Westward Expansion
+  { q: "What term described the belief that the US was destined to expand across the continent?", a: ["Expansionism","Manifest Destiny","Imperialism","Frontier Spirit"], c: 1, cat: "Westward Expansion" },
+  { q: "The Lewis and Clark Expedition set out in which year?", a: ["1800","1803","1804","1807"], c: 2, cat: "Westward Expansion" },
+  { q: "Gold was discovered in California in which year, sparking the Gold Rush?", a: ["1845","1848","1850","1853"], c: 1, cat: "Westward Expansion" },
+  { q: "The Louisiana Purchase more than doubled the size of the US. It was bought from which country?", a: ["Spain","Britain","France","Mexico"], c: 2, cat: "Westward Expansion" },
+  { q: "Which Native American leader led the Sioux at the Battle of Little Bighorn?", a: ["Geronimo","Sitting Bull","Crazy Horse","Red Cloud"], c: 1, cat: "Westward Expansion" },
+  { q: "The Transcontinental Railroad was completed in which year?", a: ["1865","1867","1869","1871"], c: 2, cat: "Westward Expansion" },
+  { q: "Alaska was purchased from which country in 1867?", a: ["Britain","Canada","Russia","Sweden"], c: 2, cat: "Westward Expansion" },
+  // World Wars
+  { q: "The US entered World War I in which year?", a: ["1914","1915","1916","1917"], c: 3, cat: "World Wars" },
+  { q: "The attack on Pearl Harbor occurred on what date?", a: ["December 7, 1941","December 7, 1942","September 1, 1941","November 11, 1941"], c: 0, cat: "World Wars" },
+  { q: "Which US general commanded Allied forces in Europe during World War II?", a: ["Douglas MacArthur","George Patton","Dwight Eisenhower","Omar Bradley"], c: 2, cat: "World Wars" },
+  { q: "The D-Day invasion took place on the beaches of which country?", a: ["Belgium","Netherlands","Germany","France"], c: 3, cat: "World Wars" },
+  { q: "The US dropped atomic bombs on which two Japanese cities?", a: ["Tokyo and Osaka","Hiroshima and Nagasaki","Kyoto and Hiroshima","Nagasaki and Tokyo"], c: 1, cat: "World Wars" },
+  { q: "Which US President ordered the use of atomic bombs on Japan?", a: ["Franklin D. Roosevelt","Harry Truman","Dwight Eisenhower","Herbert Hoover"], c: 1, cat: "World Wars" },
+  { q: "The US formally entered World War II after the attack on Pearl Harbor by which country?", a: ["Germany","Italy","Japan","Soviet Union"], c: 2, cat: "World Wars" },
+  // Civil Rights
+  { q: "Who delivered the famous 'I Have a Dream' speech?", a: ["Malcolm X","Thurgood Marshall","Martin Luther King Jr.","John Lewis"], c: 2, cat: "Civil Rights" },
+  { q: "In what year did the Civil Rights Act pass?", a: ["1961","1962","1963","1964"], c: 3, cat: "Civil Rights" },
+  { q: "Rosa Parks refused to give up her seat on a bus in which city?", a: ["Birmingham","Selma","Montgomery","Atlanta"], c: 2, cat: "Civil Rights" },
+  { q: "Which Supreme Court case declared racial segregation in schools unconstitutional?", a: ["Plessy v. Ferguson","Marbury v. Madison","Brown v. Board of Education","Roe v. Wade"], c: 2, cat: "Civil Rights" },
+  { q: "The Civil Rights March from Selma to Montgomery was also known as what?", a: ["Freedom Walk","Bloody Sunday March","The Long March","The Selma Campaign"], c: 1, cat: "Civil Rights" },
+  { q: "Which amendment gave African-American men the right to vote?", a: ["13th","14th","15th","19th"], c: 2, cat: "Civil Rights" },
+  { q: "Which amendment gave women the right to vote?", a: ["15th","17th","18th","19th"], c: 3, cat: "Civil Rights" },
+  // Cold War & Modern
+  { q: "The US and Soviet Union faced off in the Cuban Missile Crisis in which year?", a: ["1959","1960","1961","1962"], c: 3, cat: "Cold War" },
+  { q: "The Korean War ended in which year?", a: ["1951","1952","1953","1954"], c: 2, cat: "Cold War" },
+  { q: "The Vietnam War officially ended with the Fall of Saigon in which year?", a: ["1973","1974","1975","1976"], c: 2, cat: "Cold War" },
+  { q: "Which US President said 'Mr. Gorbachev, tear down this wall!'?", a: ["Jimmy Carter","Ronald Reagan","George H.W. Bush","Bill Clinton"], c: 1, cat: "Cold War" },
+  { q: "The US moon landing was part of which NASA program?", a: ["Mercury","Gemini","Apollo","Voyager"], c: 2, cat: "Space Race" },
+  { q: "Neil Armstrong landed on the Moon in which year?", a: ["1967","1968","1969","1970"], c: 2, cat: "Space Race" },
+  { q: "The September 11 attacks occurred in which year?", a: ["1999","2000","2001","2002"], c: 2, cat: "Modern History" },
+  { q: "Which war followed the September 11 attacks most directly?", a: ["Iraq War","Gulf War","War in Afghanistan","Vietnam War"], c: 2, cat: "Modern History" },
+  { q: "The US stock market crash that triggered the Great Depression occurred in which year?", a: ["1927","1928","1929","1930"], c: 2, cat: "Great Depression" },
+  { q: "Which President's New Deal programs aimed to address the Great Depression?", a: ["Herbert Hoover","Franklin D. Roosevelt","Harry Truman","Woodrow Wilson"], c: 1, cat: "Great Depression" },
+  // Geography & Government
+  { q: "How many states are in the United States?", a: ["48","49","50","52"], c: 2, cat: "American Geography" },
+  { q: "Which state was the last to be admitted to the Union?", a: ["Alaska","Hawaii","New Mexico","Arizona"], c: 1, cat: "American Geography" },
+  { q: "The capital of the United States is located in which district?", a: ["Maryland","Virginia","District of Columbia","Delaware"], c: 2, cat: "American Geography" },
+  { q: "How many senators does each US state have?", a: ["1","2","3","4"], c: 1, cat: "US Government" },
+  { q: "How many justices sit on the US Supreme Court?", a: ["7","8","9","11"], c: 2, cat: "US Government" },
+  { q: "The President of the United States serves a term of how many years?", a: ["2","3","4","5"], c: 2, cat: "US Government" },
+  { q: "Which branch of US government has the power to declare war?", a: ["Executive","Judicial","Legislative","Military"], c: 2, cat: "US Government" },
+  { q: "Who becomes President if both the President and Vice President are unable to serve?", a: ["Secretary of State","Speaker of the House","Senate Majority Leader","Chief Justice"], c: 1, cat: "US Government" },
+  { q: "The US Constitution was ratified in which year?", a: ["1785","1787","1788","1791"], c: 2, cat: "US Government" },
+  { q: "How many amendments does the US Constitution currently have?", a: ["20","25","27","30"], c: 2, cat: "US Government" },
+  // Inventions & Culture
+  { q: "Alexander Graham Bell is credited with inventing which device?", a: ["Telegraph","Telephone","Radio","Light bulb"], c: 1, cat: "American Inventions" },
+  { q: "The Wright Brothers made their first successful flight in which year?", a: ["1899","1901","1903","1905"], c: 2, cat: "American Inventions" },
+  { q: "Thomas Edison is credited with inventing a practical version of which device?", a: ["Telephone","Radio","Light bulb","Camera"], c: 2, cat: "American Inventions" },
+  { q: "Which American industrialist founded Ford Motor Company?", a: ["Andrew Carnegie","John D. Rockefeller","Henry Ford","J.P. Morgan"], c: 2, cat: "American Industry" },
+  { q: "The Erie Canal, connecting the Great Lakes to the Atlantic, opened in which year?", a: ["1815","1820","1825","1830"], c: 2, cat: "American Industry" },
+  // Native American History
+  { q: "The forced relocation of Native Americans in the 1830s is known as what?", a: ["The Long Walk","Trail of Tears","The Great Removal","Manifest Destiny"], c: 1, cat: "Native American History" },
+  { q: "Which act in 1830 authorized the removal of Native American tribes from eastern states?", a: ["Dawes Act","Indian Removal Act","Homestead Act","Indian Reorganization Act"], c: 1, cat: "Native American History" },
+  { q: "The Battle of Little Bighorn is also known as?", a: ["Custer's Folly","Sitting Bull's Revenge","Custer's Last Stand","The Great Sioux War"], c: 2, cat: "Native American History" },
+  // Immigration & Social History
+  { q: "Immigrants arriving in New York in the late 1800s were processed at which location?", a: ["Statue of Liberty","Battery Park","Ellis Island","Castle Garden"], c: 2, cat: "Immigration" },
+  { q: "The Statue of Liberty was a gift to the US from which country?", a: ["Britain","France","Italy","Spain"], c: 1, cat: "Immigration" },
+  { q: "Prohibition, banning alcohol, was established by which amendment?", a: ["16th","17th","18th","19th"], c: 2, cat: "Social History" },
+  { q: "The Great Migration refers to the movement of African Americans from the South to the North primarily in which decades?", a: ["1890s–1900s","1910s–1920s","1930s–1940s","1950s–1960s"], c: 1, cat: "Social History" },
+  // Spanish-American War & Imperialism
+  { q: "The Spanish-American War began in which year?", a: ["1895","1896","1897","1898"], c: 3, cat: "American Imperialism" },
+  { q: "As a result of the Spanish-American War, the US gained control of which island territories?", a: ["Cuba and Jamaica","Puerto Rico and Guam","Bahamas and Bermuda","Haiti and Dominican Republic"], c: 1, cat: "American Imperialism" },
+  { q: "The Monroe Doctrine, warning European powers against colonizing the Americas, was issued by which President?", a: ["Thomas Jefferson","John Quincy Adams","James Monroe","Andrew Jackson"], c: 2, cat: "American Foreign Policy" },
+  // Miscellaneous American History
+  { q: "Which war was fought between the US and Mexico from 1846 to 1848?", a: ["Spanish-American War","Texas Revolution","Mexican-American War","Civil War"], c: 2, cat: "American Wars" },
+  { q: "The Pony Express mail service operated between Missouri and which western city?", a: ["Denver","San Francisco","Salt Lake City","Sacramento"], c: 3, cat: "Westward Expansion" },
+  { q: "Which President was assassinated in Dallas, Texas in 1963?", a: ["Dwight Eisenhower","John F. Kennedy","Lyndon B. Johnson","Richard Nixon"], c: 1, cat: "Modern History" },
+  { q: "The Watergate scandal involved a break-in at which building?", a: ["The Capitol","The Pentagon","The Watergate Hotel & Office Complex","The White House"], c: 2, cat: "Modern History" },
+  { q: "Which US document begins with 'We the People'?", a: ["The Declaration of Independence","The Bill of Rights","The Federalist Papers","The Constitution"], c: 3, cat: "US Government" },
+  { q: "The Star-Spangled Banner was written after a battle during which war?", a: ["Revolutionary War","War of 1812","Mexican-American War","Civil War"], c: 1, cat: "American Culture" },
+];
+
+let scores = [0, 0];
+let currentPlayer = 0;
+let answered = false;
+let pool = [];
+let currentQ = null;
+
+function shuffle(arr) { return [...arr].sort(() => Math.random() - 0.5); }
+function getQ() {
+  if (!pool.length) pool = shuffle(questions);
+  return pool.pop();
+}
+
+// Canvas character drawing
+function drawFighter(canvasId, level, punching) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const isP2 = canvasId === 'p2-canvas';
+  const colors = isP2
+    ? { body: '#EF4444', arm: '#B91C1C', skin: '#FCD34D', hair: '#1E3A5F', shoe: '#1E3A5F' }
+    : { body: '#3B82F6', arm: '#1D4ED8', skin: '#FCD34D', hair: '#92400E', shoe: '#92400E' };
+
+  const cx = W / 2;
+  const headY = 32, headR = 20;
+  const bodyTop = headY + headR, bodyH = 52;
+  const bodyBot = bodyTop + bodyH;
+  const legH = 42, legW = 12;
+  const armBaseY = bodyTop + 12;
+
+  const armThick = 8 + level * 6;
+  const upperL = 28 + level * 5;
+  const foreL = 22 + level * 4;
+  const fistR = 8 + level * 3;
+
+  // Legs
+  ctx.fillStyle = colors.body;
+  roundRect(ctx, cx - 14, bodyBot, legW, legH - 8, 5);
+  ctx.fill();
+  roundRect(ctx, cx + 2, bodyBot, legW, legH - 8, 5);
+  ctx.fill();
+  // Shoes
+  ctx.fillStyle = colors.shoe;
+  roundRect(ctx, cx - 17, bodyBot + legH - 12, 18, 10, 5);
+  ctx.fill();
+  roundRect(ctx, cx - 1, bodyBot + legH - 12, 18, 10, 5);
+  ctx.fill();
+
+  // Body
+  ctx.fillStyle = colors.body;
+  roundRect(ctx, cx - 18, bodyTop, 36, bodyH, 8);
+  ctx.fill();
+
+  // Arms
+  ctx.lineCap = 'round';
+  ctx.lineWidth = armThick;
+
+  if (punching) {
+    // Extend punch
+    ctx.strokeStyle = colors.arm;
+    ctx.beginPath();
+    ctx.moveTo(cx, armBaseY);
+    ctx.lineTo(cx + 55, armBaseY - 5);
+    ctx.stroke();
+    ctx.fillStyle = colors.skin;
+    ctx.beginPath();
+    ctx.arc(cx + 55 + fistR, armBaseY - 5, fistR, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // Left arm (visible arm)
+    const elbowX = cx + upperL;
+    const elbowY = armBaseY + 20;
+    const fistX2 = elbowX - 4;
+    const fistY2 = elbowY + foreL * 0.4;
+    ctx.strokeStyle = colors.arm;
+    ctx.beginPath();
+    ctx.moveTo(cx, armBaseY);
+    ctx.lineTo(elbowX, elbowY);
+    ctx.stroke();
+    ctx.lineWidth = Math.max(armThick - 3, 6);
+    ctx.beginPath();
+    ctx.moveTo(elbowX, elbowY);
+    ctx.lineTo(fistX2, fistY2);
+    ctx.stroke();
+    ctx.fillStyle = colors.skin;
+    ctx.beginPath();
+    ctx.arc(fistX2, fistY2 + fistR, fistR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Back arm (right side from character view)
+  ctx.lineWidth = Math.max(armThick - 2, 5);
+  ctx.strokeStyle = colors.body;
+  ctx.beginPath();
+  ctx.moveTo(cx - 4, armBaseY + 4);
+  ctx.lineTo(cx - upperL * 0.8, armBaseY + 22);
+  ctx.stroke();
+
+  // Head
+  ctx.fillStyle = colors.skin;
+  ctx.beginPath();
+  ctx.arc(cx, headY, headR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Hair
+  ctx.fillStyle = colors.hair;
+  ctx.beginPath();
+  ctx.arc(cx, headY - 4, headR, Math.PI, 0);
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = '#1E293B';
+  ctx.beginPath(); ctx.arc(cx - 7, headY - 2, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + 7, headY - 2, 2.5, 0, Math.PI * 2); ctx.fill();
+
+  // Smile
+  ctx.strokeStyle = '#7C3AED';
+  ctx.lineWidth = 1.8;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(cx, headY + 4, 7, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+
+  // Level badge
+  if (level > 0) {
+    ctx.fillStyle = level === MAX_LEVEL ? '#F59E0B' : (isP2 ? '#EF4444' : '#3B82F6');
+    ctx.font = 'bold 12px Nunito, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`LV ${level}`, cx, H - 4);
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function updateUI() {
+  for (let i = 0; i < 2; i++) {
+    drawFighter(`p${i+1}-canvas`, scores[i], false);
+    document.getElementById(`p${i+1}-fill`).style.width = (scores[i] / MAX_LEVEL * 100) + '%';
+    document.getElementById(`p${i+1}-level`).textContent = `Level ${scores[i]} / ${MAX_LEVEL}`;
+  }
+  const pill = document.getElementById('turn-pill');
+  pill.textContent = `P${currentPlayer + 1} Turn`;
+  pill.style.background = currentPlayer === 0 ? 'rgba(59,130,246,0.2)' : 'rgba(239,68,68,0.2)';
+  pill.style.color = currentPlayer === 0 ? '#93C5FD' : '#FCA5A5';
+  pill.style.borderColor = currentPlayer === 0 ? 'rgba(59,130,246,0.4)' : 'rgba(239,68,68,0.4)';
+
+  document.getElementById('p1-fighter').classList.toggle('active-fighter', currentPlayer === 0);
+  document.getElementById('p2-fighter').classList.toggle('active-fighter', currentPlayer === 1);
+}
+
+function showQuestion() {
+  answered = false;
+  currentQ = getQ();
+  document.getElementById('q-category').textContent = currentQ.cat;
+  document.getElementById('q-text').textContent = currentQ.q;
+  const answersEl = document.getElementById('answers');
+  answersEl.innerHTML = '';
+  currentQ.a.forEach((a, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'ans-btn';
+    btn.textContent = a;
+    btn.onclick = () => handleAnswer(i);
+    answersEl.appendChild(btn);
+  });
+  document.getElementById('feedback').textContent = '';
+  document.getElementById('next-btn').style.display = 'none';
+
+  const card = document.getElementById('q-card');
+  card.classList.remove('bounce');
+  void card.offsetWidth;
+  card.classList.add('bounce');
+}
+
+function handleAnswer(idx) {
+  if (answered) return;
+  answered = true;
+  const btns = document.querySelectorAll('.ans-btn');
+  btns.forEach(b => b.disabled = true);
+  const correct = idx === currentQ.c;
+  btns[idx].classList.add(correct ? 'correct' : 'wrong');
+  if (!correct) btns[currentQ.c].classList.add('correct');
+
+  const fb = document.getElementById('feedback');
+  if (correct) {
+    scores[currentPlayer]++;
+    fb.style.color = '#86EFAC';
+    fb.textContent = `✓ Correct! Player ${currentPlayer + 1}'s arms are GROWING! 💪`;
+    drawFighter(`p${currentPlayer + 1}-canvas`, scores[currentPlayer], false);
+    document.getElementById(`p${currentPlayer + 1}-fill`).style.width = (scores[currentPlayer] / MAX_LEVEL * 100) + '%';
+    document.getElementById(`p${currentPlayer + 1}-level`).textContent = `Level ${scores[currentPlayer]} / ${MAX_LEVEL}`;
+
+    if (scores[currentPlayer] >= MAX_LEVEL) {
+      setTimeout(() => triggerWin(currentPlayer), 600);
+      return;
+    }
+  } else {
+    fb.style.color = '#FCA5A5';
+    fb.textContent = `✗ Wrong! No gains this turn.`;
+  }
+  document.getElementById('next-btn').style.display = 'inline-block';
+}
+
+function triggerWin(winner) {
+  const loser = 1 - winner;
+
+  drawFighter(`p${winner + 1}-canvas`, MAX_LEVEL, true);
+
+  const loserFighter = document.getElementById(`p${loser + 1}-fighter`);
+  loserFighter.style.animation = loser === 0
+    ? 'flyAwayLeft 0.8s ease forwards'
+    : 'flyAway 0.8s ease forwards';
+
+  setTimeout(() => {
+    document.getElementById('game-wrap').style.display = 'none';
+    const ws = document.getElementById('win-screen');
+    ws.style.display = 'block';
+    document.getElementById('win-title').style.color = winner === 0 ? '#93C5FD' : '#FCA5A5';
+    document.getElementById('win-title').textContent = `Player ${winner + 1} Wins!`;
+    document.getElementById('win-desc').textContent =
+      `Player ${winner + 1} answered ${MAX_LEVEL} questions correctly and achieved LEGENDARY ARM SIZE! Player ${loser + 1} got punched into the stratosphere! 🚀`;
+  }, 900);
+}
+
+document.getElementById('next-btn').onclick = () => {
+  currentPlayer = 1 - currentPlayer;
+  updateUI();
+  showQuestion();
+};
+
+document.getElementById('restart-btn').onclick = () => {
+  scores = [0, 0];
+  currentPlayer = 0;
+  pool = [];
+  document.getElementById('win-screen').style.display = 'none';
+  document.getElementById('game-wrap').style.display = 'block';
+  document.querySelectorAll('.fighter').forEach(f => { f.style.animation = ''; f.style.opacity = 1; });
+  updateUI();
+  showQuestion();
+};
+
+// Init
+pool = shuffle(questions);
+updateUI();
+showQuestion();
+</script>
+</body>
+</html>
