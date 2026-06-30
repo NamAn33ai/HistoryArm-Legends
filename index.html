@@ -3,741 +3,1265 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Arm Legends — History Quiz Battle</title>
-<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data: blob:;">
+<!-- v25-results-tab -->
+<title>FIFA World Cup 2026 - Knockout Bracket Challenge</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<script>
+// ===================== FIREBASE REST API =====================
+const FB_PROJECT = 'worlcup26-bracket';
+const FB_API_KEY = 'AIzaSyAftp5zTkmJE-kuQZgm_A7bxSmcYGqyLCI';
+const FB_BASE = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents`;
+
+// ===================== GROUP SCOPING =====================
+// Each group is fully independent (own bracket, results, predictions, leaderboard).
+// Join via URL e.g. ?group=family  (defaults to "main").
+function getGroupCode() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    let g = (p.get('group') || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    return g || 'main';
+  } catch(e) { return 'main'; }
+}
+function isAdminMode() {
+  try { return new URLSearchParams(window.location.search).get('admin') === '1'; }
+  catch(e) { return false; }
+}
+var GROUP_CODE = getGroupCode();
+
+function toFS(val) {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
+  if (typeof val === 'string') return { stringValue: val };
+  if (Array.isArray(val)) return { arrayValue: { values: val.map(toFS) } };
+  if (typeof val === 'object') {
+    const fields = {};
+    for (const k in val) fields[k] = toFS(val[k]);
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(val) };
+}
+function fromFS(fsVal) {
+  if (!fsVal) return null;
+  if ('nullValue' in fsVal) return null;
+  if ('booleanValue' in fsVal) return fsVal.booleanValue;
+  if ('integerValue' in fsVal) return parseInt(fsVal.integerValue);
+  if ('doubleValue' in fsVal) return fsVal.doubleValue;
+  if ('stringValue' in fsVal) return fsVal.stringValue;
+  if ('arrayValue' in fsVal) return (fsVal.arrayValue.values || []).map(fromFS);
+  if ('mapValue' in fsVal) {
+    const obj = {};
+    for (const k in (fsVal.mapValue.fields || {})) obj[k] = fromFS(fsVal.mapValue.fields[k]);
+    return obj;
+  }
+  return null;
+}
+function docToObj(doc) {
+  if (!doc || !doc.fields) return null;
+  const obj = {};
+  for (const k in doc.fields) obj[k] = fromFS(doc.fields[k]);
+  return obj;
+}
+function objToFields(obj) {
+  const fields = {};
+  for (const k in obj) fields[k] = toFS(obj[k]);
+  return fields;
+}
+async function fsGet(collection, docId) {
+  const url = `${FB_BASE}/${collection}/${docId}?key=${FB_API_KEY}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { method:'GET', headers:{'Content-Type':'application/json'}, signal:controller.signal });
+    clearTimeout(timer);
+    if (res.status === 404) return null;
+    if (!res.ok) { const txt = await res.text(); throw new Error(`GET ${res.status}: ${txt.slice(0,100)}`); }
+    return docToObj(await res.json());
+  } catch(e) { clearTimeout(timer); if (e.name==='AbortError') throw new Error('Request timed out'); throw e; }
+}
+async function fsSet(collection, docId, obj) {
+  const url = `${FB_BASE}/${collection}/${docId}?key=${FB_API_KEY}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({fields:objToFields(obj)}), signal:controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) { const txt = await res.text(); throw new Error(`SET ${res.status}: ${txt.slice(0,100)}`); }
+    return true;
+  } catch(e) { clearTimeout(timer); if (e.name==='AbortError') throw new Error('Request timed out'); throw e; }
+}
+async function fsGetAll(collection) {
+  const url = `${FB_BASE}/${collection}?key=${FB_API_KEY}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { method:'GET', headers:{'Content-Type':'application/json'}, signal:controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) { const txt = await res.text(); throw new Error(`LIST ${res.status}: ${txt.slice(0,100)}`); }
+    const data = await res.json();
+    if (!data.documents) return [];
+    return data.documents.map(d => docToObj(d)).filter(Boolean);
+  } catch(e) { clearTimeout(timer); if (e.name==='AbortError') throw new Error('List timed out'); throw e; }
+}
+window._fb = {
+  async fbSavePrediction(playerName, data) {
+    const key = GROUP_CODE + '__' + playerName.toLowerCase().replace(/\s+/g, '_');
+    await fsSet('ko_predictions', key, { name: playerName, group: GROUP_CODE, ...data, updatedAt: Date.now() });
+  },
+  async fbLoadPrediction(playerName) {
+    const key = GROUP_CODE + '__' + playerName.toLowerCase().replace(/\s+/g, '_');
+    return await fsGet('ko_predictions', key);
+  },
+  // Results & bracket are GLOBAL (shared by all groups) - set only by the main admin.
+  async fbSaveResults(data) { await fsSet('ko_shared', 'global__results', { ...data, updatedAt: Date.now() }); },
+  async fbLoadResults() { return await fsGet('ko_shared', 'global__results'); },
+  async fbSaveBracket(data) { await fsSet('ko_shared', 'global__bracket', { ...data, updatedAt: Date.now() }); },
+  async fbLoadBracket() { return await fsGet('ko_shared', 'global__bracket'); },
+  // "Featured winner" is PER-GROUP (each pool features its own winner).
+  async fbSaveFeatured(name) { await fsSet('ko_shared', GROUP_CODE + '__featured', { group: GROUP_CODE, featured: name||'', updatedAt: Date.now() }); },
+  async fbLoadFeatured() { return await fsGet('ko_shared', GROUP_CODE + '__featured'); },
+  async fbLoadAllPredictions() {
+    const all = await fsGetAll('ko_predictions');
+    // only this group's players (keyed/prefixed by group)
+    return all.filter(p => p && p.group === GROUP_CODE);
+  }
+};
+window._fbReady = true;
+document.dispatchEvent(new Event('fbReady'));
+</script>
 <style>
   :root {
-    --p1: #3B82F6;
-    --p1-dark: #1D4ED8;
-    --p1-light: #DBEAFE;
-    --p2: #EF4444;
-    --p2-dark: #B91C1C;
-    --p2-light: #FEE2E2;
-    --gold: #F59E0B;
-    --bg: #0F172A;
-    --surface: #1E293B;
-    --surface2: #2D3A4F;
-    --text: #F1F5F9;
-    --muted: #94A3B8;
-    --radius: 14px;
-    --max-level: 5;
+    --gold:#F5C518;--gold2:#E0A800;--red:#C8102E;--dark:#0A0A0F;
+    --card:#12131A;--card2:#1A1B25;--border:#2A2B38;--text:#E8E8EE;
+    --muted:#7A7A99;--green:#22C55E;--blue:#3B82F6;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Nunito', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    overflow-x: hidden;
-  }
-
-  /* Stars background */
-  body::before {
-    content: '';
-    position: fixed; inset: 0;
-    background-image:
-      radial-gradient(1px 1px at 10% 15%, rgba(255,255,255,0.5) 0%, transparent 100%),
-      radial-gradient(1px 1px at 30% 60%, rgba(255,255,255,0.3) 0%, transparent 100%),
-      radial-gradient(1px 1px at 55% 25%, rgba(255,255,255,0.4) 0%, transparent 100%),
-      radial-gradient(1px 1px at 75% 80%, rgba(255,255,255,0.3) 0%, transparent 100%),
-      radial-gradient(1px 1px at 88% 40%, rgba(255,255,255,0.5) 0%, transparent 100%),
-      radial-gradient(1px 1px at 20% 85%, rgba(255,255,255,0.2) 0%, transparent 100%),
-      radial-gradient(1px 1px at 65% 55%, rgba(255,255,255,0.3) 0%, transparent 100%),
-      radial-gradient(1px 1px at 42% 90%, rgba(255,255,255,0.4) 0%, transparent 100%);
-    pointer-events: none;
-    z-index: 0;
-  }
-
-  .page { position: relative; z-index: 1; width: 100%; max-width: 780px; padding: 0 16px 40px; }
-
-  /* HEADER */
-  header {
-    text-align: center;
-    padding: 28px 0 16px;
-  }
-  header h1 {
-    font-family: 'Bangers', cursive;
-    font-size: clamp(36px, 8vw, 62px);
-    letter-spacing: 3px;
-    line-height: 1;
-    color: var(--gold);
-    text-shadow: 3px 3px 0 #92400E, 0 0 30px rgba(245,158,11,0.5);
-  }
-  header p {
-    font-size: 13px;
-    color: var(--muted);
-    margin-top: 6px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }
-
-  /* ARENA */
-  .arena {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: end;
-    gap: 8px;
-    padding: 16px 0 8px;
-  }
-  .fighter {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    transition: transform 0.3s ease;
-  }
-  .fighter.p2 { transform: scaleX(-1); }
-  .fighter.p2 .fighter-name, .fighter.p2 .level-label { transform: scaleX(-1); }
-  .fighter-name {
-    font-family: 'Bangers', cursive;
-    font-size: 22px;
-    letter-spacing: 2px;
-  }
-  .p1 .fighter-name { color: var(--p1); }
-  .p2 .fighter-name { color: var(--p2); }
-  .level-label {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-  .fighter canvas { display: block; }
-
-  /* Progress bar */
-  .prog-wrap {
-    width: 100%;
-    max-width: 130px;
-  }
-  .prog-track {
-    height: 10px;
-    background: var(--surface2);
-    border-radius: 6px;
-    overflow: hidden;
-    border: 1px solid rgba(255,255,255,0.07);
-  }
-  .prog-fill {
-    height: 100%;
-    border-radius: 6px;
-    transition: width 0.5s cubic-bezier(.34,1.56,.64,1);
-  }
-  .p1 .prog-fill { background: linear-gradient(90deg, var(--p1-dark), var(--p1)); }
-  .p2 .prog-fill { background: linear-gradient(90deg, var(--p2-dark), var(--p2)); }
-
-  /* VS */
-  .vs-col {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding-bottom: 20px;
-  }
-  .vs-badge {
-    font-family: 'Bangers', cursive;
-    font-size: 28px;
-    letter-spacing: 2px;
-    color: var(--gold);
-    text-shadow: 2px 2px 0 #92400E;
-  }
-  #turn-pill {
-    background: var(--surface2);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 99px;
-    padding: 5px 14px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    white-space: nowrap;
-    transition: background 0.3s, color 0.3s;
-  }
-
-  /* QUESTION CARD */
-  .q-card {
-    background: var(--surface);
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: var(--radius);
-    padding: 22px 22px 18px;
-    margin-top: 12px;
-  }
-  .q-category {
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--gold);
-    margin-bottom: 10px;
-  }
-  .q-text {
-    font-size: clamp(15px, 3vw, 18px);
-    font-weight: 700;
-    line-height: 1.4;
-    color: var(--text);
-    margin-bottom: 18px;
-  }
-  .answers {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-  .ans-btn {
-    background: var(--surface2);
-    border: 1.5px solid rgba(255,255,255,0.08);
-    border-radius: 10px;
-    padding: 12px 14px;
-    font-family: 'Nunito', sans-serif;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text);
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.15s ease;
-    line-height: 1.3;
-  }
-  .ans-btn:hover:not(:disabled) {
-    background: rgba(255,255,255,0.1);
-    border-color: rgba(255,255,255,0.2);
-    transform: translateY(-2px);
-  }
-  .ans-btn.correct {
-    background: rgba(34,197,94,0.2);
-    border-color: #22C55E;
-    color: #86EFAC;
-  }
-  .ans-btn.wrong {
-    background: rgba(239,68,68,0.15);
-    border-color: #EF4444;
-    color: #FCA5A5;
-  }
-  .ans-btn:disabled { cursor: default; transform: none; }
-
-  /* FEEDBACK */
-  #feedback {
-    text-align: center;
-    font-size: 15px;
-    font-weight: 800;
-    min-height: 28px;
-    padding: 10px 0 4px;
-    letter-spacing: 0.5px;
-    transition: color 0.3s;
-  }
-
-  /* NEXT BUTTON */
-  #next-btn {
-    display: none;
-    margin: 10px auto 0;
-    padding: 12px 32px;
-    font-family: 'Bangers', cursive;
-    font-size: 20px;
-    letter-spacing: 2px;
-    background: var(--gold);
-    color: #1c1000;
-    border: none;
-    border-radius: 99px;
-    cursor: pointer;
-    box-shadow: 0 4px 0 #92400E;
-    transition: transform 0.1s, box-shadow 0.1s;
-  }
-  #next-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 0 #92400E; }
-  #next-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #92400E; }
-
-  /* WIN SCREEN */
-  #win-screen {
-    display: none;
-    text-align: center;
-    padding: 40px 20px;
-    animation: fadeIn 0.5s ease;
-  }
-  #win-screen .trophy { font-size: 72px; margin-bottom: 10px; }
-  #win-title {
-    font-family: 'Bangers', cursive;
-    font-size: clamp(40px, 10vw, 72px);
-    letter-spacing: 4px;
-    line-height: 1;
-    text-shadow: 3px 3px 0 rgba(0,0,0,0.5);
-    margin-bottom: 12px;
-  }
-  #win-desc {
-    font-size: 16px;
-    color: var(--muted);
-    max-width: 360px;
-    margin: 0 auto 28px;
-    line-height: 1.5;
-  }
-  #restart-btn {
-    font-family: 'Bangers', cursive;
-    font-size: 24px;
-    letter-spacing: 2px;
-    background: var(--gold);
-    color: #1c1000;
-    border: none;
-    border-radius: 99px;
-    padding: 14px 40px;
-    cursor: pointer;
-    box-shadow: 0 5px 0 #92400E;
-    transition: transform 0.1s, box-shadow 0.1s;
-  }
-  #restart-btn:hover { transform: translateY(-2px); box-shadow: 0 7px 0 #92400E; }
-  #restart-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #92400E; }
-
-  /* Punch animation */
-  @keyframes flyAway {
-    0%   { transform: scaleX(-1) translateX(0) rotate(0) scale(1); opacity: 1; }
-    100% { transform: scaleX(-1) translateX(320px) rotate(40deg) scale(0.4); opacity: 0; }
-  }
-  @keyframes flyAwayLeft {
-    0%   { transform: translateX(0) rotate(0) scale(1); opacity: 1; }
-    100% { transform: translateX(-320px) rotate(-40deg) scale(0.4); opacity: 0; }
-  }
-  @keyframes punchOut {
-    0%   { transform: scale(1); }
-    20%  { transform: scale(1.15); }
-    100% { transform: scale(1); }
-  }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
-  @keyframes popIn  { 0% { transform: scale(0.7); opacity: 0; } 70% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
-
-  .bounce { animation: popIn 0.4s cubic-bezier(.34,1.56,.64,1) forwards; }
-
-  /* Pulse ring on active player */
-  .active-fighter canvas {
-    filter: drop-shadow(0 0 10px currentColor);
-  }
-  .p1.active-fighter canvas { color: var(--p1); }
-  .p2.active-fighter canvas { color: var(--p2); }
-
-  @media (max-width: 480px) {
-    .answers { grid-template-columns: 1fr; }
-    .arena { gap: 4px; }
-  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:var(--dark);color:var(--text);font-family:'Barlow',sans-serif;min-height:100vh;}
+  header{background:linear-gradient(135deg,#0A0A0F 0%,#1a0a00 50%,#0A0A0F 100%);border-bottom:2px solid var(--gold);padding:16px 20px;position:sticky;top:0;z-index:100;}
+  .header-inner{max-width:1400px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+  .logo-block h1{font-family:'Bebas Neue',sans-serif;font-size:1.8rem;letter-spacing:3px;background:linear-gradient(135deg,var(--gold) 0%,#fff 60%,var(--gold) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;line-height:1;}
+  .logo-block p{font-family:'Barlow Condensed',sans-serif;font-size:0.7rem;letter-spacing:3px;color:var(--muted);text-transform:uppercase;margin-top:2px;}
+  .header-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .player-input-area{display:flex;gap:8px;align-items:center;}
+  .player-input-area input{background:var(--card2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-family:'Barlow',sans-serif;font-size:0.85rem;width:140px;outline:none;}
+  .player-input-area input:focus{border-color:var(--gold);}
+  .btn{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.82rem;letter-spacing:1px;text-transform:uppercase;padding:8px 14px;border-radius:6px;cursor:pointer;border:none;transition:all 0.15s;}
+  .btn-gold{background:var(--gold);color:#000;}.btn-gold:hover{background:var(--gold2);}
+  .btn-outline{background:transparent;border:1px solid var(--border);color:var(--muted);}.btn-outline:hover{border-color:var(--gold);color:var(--gold);}
+  #sync-bar{background:var(--card2);border-bottom:1px solid var(--border);padding:6px 20px;font-family:'Barlow Condensed',sans-serif;font-size:0.75rem;letter-spacing:1px;display:flex;align-items:center;gap:8px;}
+  .sync-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0;}
+  .sync-dot.ok{background:var(--green);}
+  .sync-dot.saving{background:var(--gold);animation:pulse 0.8s infinite;}
+  .sync-dot.err{background:#f87171;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+  .tabs{max-width:1400px;margin:0 auto;display:flex;gap:4px;padding:14px 20px 0;border-bottom:1px solid var(--border);}
+  .tab{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.88rem;letter-spacing:1px;text-transform:uppercase;padding:9px 18px;cursor:pointer;border-radius:6px 6px 0 0;border:1px solid transparent;border-bottom:none;color:var(--muted);background:transparent;transition:all 0.15s;position:relative;bottom:-1px;}
+  .tab.active{background:var(--card);color:var(--gold);border-color:var(--border);border-bottom-color:var(--card);}
+  .tab:hover:not(.active){color:var(--text);}
+  .main{max-width:1400px;margin:0 auto;padding:20px;}
+  .tab-panel{display:none;}.tab-panel.active{display:block;}
+  .player-tabs{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;align-items:center;}
+  .player-tab{font-family:'Barlow Condensed',sans-serif;font-weight:600;font-size:0.85rem;letter-spacing:1px;padding:7px 14px;border-radius:20px;cursor:pointer;border:1px solid var(--border);background:var(--card2);color:var(--muted);transition:all 0.15s;display:flex;align-items:center;gap:7px;}
+  .player-tab.active{background:var(--gold);color:#000;border-color:var(--gold);font-weight:700;}
+  .player-tab .score-badge{background:rgba(0,0,0,0.25);border-radius:10px;padding:1px 7px;font-size:0.72rem;font-weight:700;}
+  .player-tab .remove-player{width:15px;height:15px;border-radius:50%;background:rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;font-size:9px;cursor:pointer;flex-shrink:0;}
+  .player-tab .remove-player:hover{background:var(--red);color:white;}
+  .bracket-wrap{overflow-x:auto;padding-bottom:16px;}
+  .bracket-tree{display:flex;gap:0;align-items:stretch;min-width:1050px;}
+  .bracket-col{display:flex;flex-direction:column;flex-shrink:0;width:178px;}
+  .bracket-col-label{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.66rem;letter-spacing:2px;text-transform:uppercase;color:var(--muted);text-align:center;padding:6px 4px;background:var(--card2);border-radius:6px;margin:0 6px 10px;}
+  .bracket-col-matches{display:flex;flex-direction:column;flex:1;justify-content:space-around;}
+  .bracket-col.round-champ .bracket-col-matches{justify-content:center;}
+  .bracket-slot{flex:0 0 auto;display:flex;align-items:center;padding:3px 0;}
+  .bk-match{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:0 6px;width:100%;}
+  .bk-team{display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;transition:background 0.1s;font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;font-weight:600;min-width:0;}
+  .bk-team:first-child{border-bottom:1px solid var(--border);}
+  .bk-team:hover{background:rgba(245,197,24,0.08);}
+  .bk-team.winner{background:rgba(245,197,24,0.12);color:var(--gold);}
+  .bk-team.loser{opacity:0.38;}
+  .bk-team-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .bk-check{color:var(--gold);font-size:0.72rem;flex-shrink:0;}
+  .third-place-section{margin-top:20px;padding-top:16px;border-top:1px solid var(--border);}
+  .third-place-label{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:0.68rem;letter-spacing:3px;text-transform:uppercase;color:var(--muted);text-align:center;padding:6px 12px;background:var(--card2);border-radius:6px;display:inline-block;}
+  .third-place-match{max-width:340px;margin:0 auto;background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .champion-box{text-align:center;padding:16px 10px;background:var(--card);border:1px solid var(--gold);border-radius:10px;}
+  .champion-trophy{font-size:2rem;margin-bottom:6px;}
+  .champion-label{font-family:'Barlow Condensed',sans-serif;font-size:0.65rem;letter-spacing:3px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;}
+  .champion-name{font-family:'Bebas Neue',sans-serif;font-size:1.1rem;color:var(--gold);letter-spacing:2px;display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;}
+  .leaderboard{max-width:680px;}
+  .lb-row{display:flex;align-items:center;gap:12px;padding:13px 16px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:7px;}
+  .lb-row.rank-1{border-color:var(--gold);background:rgba(245,197,24,0.06);}
+  .lb-row.rank-2{border-color:#888;background:rgba(180,180,180,0.04);}
+  .lb-row.rank-3{border-color:#cd7f32;background:rgba(205,127,50,0.04);}
+  .lb-rank{font-family:'Bebas Neue',sans-serif;font-size:1.4rem;width:28px;text-align:center;color:var(--muted);}
+  .lb-row.rank-1 .lb-rank{color:var(--gold);}.lb-row.rank-2 .lb-rank{color:#aaa;}.lb-row.rank-3 .lb-rank{color:#cd7f32;}
+  .lb-medal{font-size:1.2rem;}
+  .lb-name{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:1.05rem;letter-spacing:1px;flex:1;}
+  .lb-score-block{text-align:right;}
+  .lb-total{font-family:'Bebas Neue',sans-serif;font-size:1.7rem;color:var(--gold);line-height:1;}
+  .lb-breakdown{font-size:0.68rem;color:var(--muted);}
+  .scoring-info{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
+  .score-pill{background:var(--card2);border:1px solid var(--border);border-radius:20px;padding:5px 12px;font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;color:var(--muted);display:flex;align-items:center;gap:5px;}
+  .score-pill strong{color:var(--gold);font-size:0.88rem;}
+  .instructions{background:var(--card2);border:1px solid var(--border);border-left:3px solid var(--gold);border-radius:8px;padding:12px 14px;margin-bottom:18px;font-size:0.83rem;color:var(--muted);line-height:1.6;}
+  .instructions strong{color:var(--text);}
+  .results-note{background:var(--card2);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:11px 14px;margin-bottom:18px;font-size:0.83rem;color:var(--muted);}
+  .round-title{font-family:'Bebas Neue',sans-serif;font-size:1.15rem;letter-spacing:3px;color:var(--gold);margin-bottom:12px;padding-bottom:7px;border-bottom:1px solid var(--border);}
+  .admin-input{background:var(--card);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:6px;font-family:'Barlow',sans-serif;font-size:0.82rem;outline:none;}
+  .admin-input:focus{border-color:var(--gold);}
+  #loading-overlay{position:fixed;inset:0;background:var(--dark);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;gap:16px;}
+  #loading-overlay .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--gold);border-radius:50%;animation:spin 0.7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  #loading-overlay p{font-family:'Barlow Condensed',sans-serif;letter-spacing:2px;color:var(--muted);font-size:0.85rem;}
+  ::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:var(--dark);}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+  @media(max-width:600px){.logo-block h1{font-size:1.3rem;}.main{padding:14px;}}
 </style>
 </head>
 <body>
-<div class="page">
-  <header>
-    <h1>ARM LEGENDS</h1>
-    <p>History Quiz Battle</p>
-  </header>
 
-  <div id="game-wrap">
-    <div class="arena">
-      <div class="fighter p1 active-fighter" id="p1-fighter">
-        <div class="fighter-name">PLAYER 1</div>
-        <canvas id="p1-canvas" width="130" height="190"></canvas>
-        <div class="prog-wrap">
-          <div class="prog-track"><div class="prog-fill" id="p1-fill" style="width:0%"></div></div>
-        </div>
-        <div class="level-label" id="p1-level">Level 0 / 5</div>
-      </div>
-
-      <div class="vs-col">
-        <div class="vs-badge">VS</div>
-        <div id="turn-pill">P1 Turn</div>
-      </div>
-
-      <div class="fighter p2" id="p2-fighter">
-        <div class="fighter-name">PLAYER 2</div>
-        <canvas id="p2-canvas" width="130" height="190"></canvas>
-        <div class="prog-wrap">
-          <div class="prog-track"><div class="prog-fill" id="p2-fill" style="width:0%"></div></div>
-        </div>
-        <div class="level-label" id="p2-level">Level 0 / 5</div>
-      </div>
-    </div>
-
-    <div class="q-card" id="q-card">
-      <div class="q-category" id="q-category">History</div>
-      <div class="q-text" id="q-text">Loading question...</div>
-      <div class="answers" id="answers"></div>
-    </div>
-
-    <div id="feedback"></div>
-    <div style="text-align:center"><button id="next-btn">Next Question ›</button></div>
-  </div>
-
-  <div id="win-screen">
-    <div class="trophy">🏆</div>
-    <div id="win-title">Player 1 Wins!</div>
-    <div id="win-desc">Their arms grew to legendary size and punched the opponent into orbit!</div>
-    <button id="restart-btn">Play Again!</button>
-  </div>
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <p>Connecting to Firebase...</p>
+  <p id="load-diag" style="font-size:0.7rem;color:#f59e0b;margin-top:8px;max-width:280px;text-align:center;"></p>
 </div>
 
+<header>
+  <div class="header-inner">
+    <div class="logo-block">
+      <h1>&#9917; World Cup 2026</h1>
+      <p>Knockout Bracket Challenge &middot; <span id="group-label"></span></p>
+    </div>
+    <div class="header-controls">
+      <div class="player-input-area">
+        <input type="text" id="playerNameInput" placeholder="Your name..." maxlength="20" onkeydown="if(event.key==='Enter')addPlayer()"/>
+        <button class="btn btn-gold" onclick="addPlayer()">+ Join</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div id="sync-bar">
+  <div class="sync-dot" id="syncDot"></div>
+  <span id="syncMsg">Connecting...</span>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('bracket',this)">My Bracket</button>
+  <button class="tab" onclick="showTab('leaderboard',this)">&#127942; Leaderboard</button>
+  <button class="tab" id="results-tab-btn" style="display:none;" onclick="showTab('results',this)">&#9917; Results</button>
+  <button class="tab" id="featured-tab-btn" style="display:none;" onclick="showTab('featured',this)">&#129351; Winner's Bracket</button>
+  <button class="tab" id="admin-tab-btn" style="display:none;" onclick="showTab('admin',this)">&#128272; Admin</button>
+</div>
+
+<div class="main">
+  <div id="player-tabs-bar" class="player-tabs"></div>
+
+  <!-- BRACKET -->
+  <div id="tab-bracket" class="tab-panel active">
+    <div class="scoring-info">
+      <div class="score-pill"><strong>R32</strong> 1pt</div>
+      <div class="score-pill"><strong>R16</strong> 2pts</div>
+      <div class="score-pill"><strong>QF</strong> 3pts</div>
+      <div class="score-pill"><strong>SF</strong> 4pts</div>
+      <div class="score-pill"><strong>3rd Place</strong> 4pts</div>
+      <div class="score-pill"><strong>Final</strong> 5pts</div>
+      <div class="score-pill"><strong>Champion</strong> 6pts</div>
+    </div>
+    <div class="instructions">
+      <strong>How to play:</strong> Enter your name and tap <strong>Join</strong>. Click a team in each matchup to pick the winner, advancing through to the Champion. Points are awarded for each correct pick, worth more in later rounds. Your picks auto-save to the cloud.
+    </div>
+    <div id="bracket-container"></div>
+  </div>
+
+  <!-- FEATURED WINNER'S BRACKET -->
+  <div id="tab-featured" class="tab-panel">
+    <div class="instructions">
+      &#129351; <strong>Winner's Bracket</strong> &mdash; the featured player's full set of picks, shown after the tournament finishes.
+    </div>
+    <div id="featured-container"></div>
+  </div>
+
+  <!-- OFFICIAL RESULTS -->
+  <div id="tab-results" class="tab-panel">
+    <div class="instructions">
+      &#9917; <strong>Official Results</strong> &mdash; the actual tournament bracket as matches finish. Updated by the admin. Use this to see how your picks are doing.
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+      <button class="btn btn-outline" onclick="renderResultsTab()">&#8635; Refresh</button>
+    </div>
+    <div id="results-container"></div>
+  </div>
+
+  <!-- LEADERBOARD -->
+  <div id="tab-leaderboard" class="tab-panel">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+      <h2 style="font-family:'Bebas Neue',sans-serif;font-size:1.5rem;letter-spacing:3px;color:var(--gold);">&#127942; Leaderboard</h2>
+      <button class="btn btn-outline" onclick="loadLeaderboard()">&#8635; Refresh</button>
+    </div>
+    <div id="leaderboard-list" class="leaderboard"></div>
+  </div>
+
+  <!-- ADMIN -->
+  <div id="tab-admin" class="tab-panel">
+    <div class="results-note">
+      &#128272; <strong>Admin only.</strong> The bracket and official results are <strong>global</strong> &mdash; set once in the <strong>main</strong> group, and every group uses them automatically. Featuring a winner's bracket is per-group.
+    </div>
+
+    <div id="non-main-admin-note" style="display:none;background:var(--card2);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:8px;padding:12px 14px;margin-bottom:22px;font-size:0.84rem;color:var(--muted);">
+      &#8505;&#65039; The 32 teams and official results are managed in the <strong>main</strong> group and shared everywhere. To edit them, open <strong>?group=main&amp;admin=1</strong>. Here you can feature this group's winning bracket below.
+    </div>
+
+    <div id="main-admin-only">
+    <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:22px;">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:2px;color:var(--gold);margin-bottom:10px;">&#128302; Step 1 &middot; Set the 32 Teams (Round of 32) &mdash; Global</div>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:12px;">After the group stage ends, fetch the official R32 matchups from API-Football, or enter them manually below. This bracket applies to <strong>all groups</strong>. Free key at <a href="https://dashboard.api-football.com/register" target="_blank" style="color:var(--gold);">dashboard.api-football.com/register</a></div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <input type="text" id="apiKeyInput" placeholder="Paste API-Football key..." oninput="saveApiKey()" class="admin-input" style="flex:1;min-width:200px;"/>
+        <button class="btn btn-gold" onclick="fetchR32Bracket()" id="fetchBracketBtn">&#9889; Fetch R32 Matchups</button>
+        <button class="btn btn-outline" onclick="fillSampleTeams()" id="sampleBtn">&#129514; Fill Sample Teams (test)</button>
+        <span id="fetch-bracket-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);"></span>
+      </div>
+      <div id="admin-r32-editor"></div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+        <div style="font-family:'Barlow Condensed',sans-serif;font-size:0.78rem;letter-spacing:1px;color:var(--gold);text-transform:uppercase;margin-bottom:6px;">&#9201; Pick Deadline (first R32 kickoff)</div>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:8px;">Everyone's picks lock at this time, including you. Leave blank for no lock. Uses your device's local time zone.</div>
+        <input type="datetime-local" id="deadlineInput" class="admin-input" style="min-width:230px;"/>
+      </div>
+      <div style="display:flex;gap:9px;margin-top:12px;">
+        <button class="btn btn-gold" onclick="publishBracket()">&#128228; Publish Bracket to All Groups</button>
+        <span id="publish-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--green);align-self:center;"></span>
+      </div>
+    </div>
+
+    <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:22px;">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:2px;color:var(--gold);margin-bottom:10px;">&#127941; Step 2 &middot; Enter Official Results &mdash; Global</div>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:12px;">As knockout matches finish, click the actual winners below (or use Fetch to auto-pull). These results score <strong>every group</strong> automatically.</div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <button class="btn btn-gold" onclick="fetchKoResults()" id="fetchResultsBtn">&#9889; Fetch Results</button>
+        <button class="btn btn-outline" onclick="randomizeResults()">&#127922; Random Results (test)</button>
+        <button class="btn btn-outline" onclick="clearResults()">&#128465; Clear Results (test)</button>
+        <span id="fetch-results-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);"></span>
+      </div>
+      <div id="admin-results-bracket"></div>
+    </div>
+    </div><!-- /main-admin-only -->
+
+    <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:22px;">
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.05rem;letter-spacing:2px;color:var(--gold);margin-bottom:10px;">&#129351; Step 3 &middot; Feature the Winner's Bracket &mdash; This Group</div>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:12px;">Pick whose bracket to share with <strong>this group</strong>. It becomes visible to everyone here in a "Winner's Bracket" tab &mdash; but only after the Champion result has been entered (in main).</div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;">
+        <select id="featureSelect" class="admin-input" style="min-width:200px;"></select>
+        <button class="btn btn-gold" onclick="featureBracket()">&#129351; Feature This Bracket</button>
+        <button class="btn btn-outline" onclick="unfeatureBracket()">Clear</button>
+        <span id="feature-status" style="font-family:'Barlow Condensed',sans-serif;font-size:0.8rem;color:var(--muted);"></span>
+      </div>
+    </div>
+  </div>
+</div>
 <script>
-const MAX_LEVEL = 5;
-const questions = [
-  // Founding Era
-  { q: "Who wrote the Declaration of Independence?", a: ["George Washington","Benjamin Franklin","Thomas Jefferson","John Adams"], c: 2, cat: "Founding Era" },
-  { q: "In what year was the Declaration of Independence signed?", a: ["1774","1775","1776","1777"], c: 2, cat: "Founding Era" },
-  { q: "Who was the first President of the United States?", a: ["John Adams","Thomas Jefferson","George Washington","James Madison"], c: 2, cat: "Founding Era" },
-  { q: "How many original colonies signed the Declaration of Independence?", a: ["11","12","13","14"], c: 2, cat: "Founding Era" },
-  { q: "The Constitutional Convention was held in which city?", a: ["Boston","New York","Philadelphia","Richmond"], c: 2, cat: "Founding Era" },
-  { q: "Who is known as the 'Father of the Constitution'?", a: ["Alexander Hamilton","George Washington","Thomas Jefferson","James Madison"], c: 3, cat: "Founding Era" },
-  { q: "The first ten amendments to the Constitution are called what?", a: ["The Articles of Confederation","The Bill of Rights","The Federalist Papers","The Magna Carta"], c: 1, cat: "Founding Era" },
-  { q: "Who was the second President of the United States?", a: ["Thomas Jefferson","James Madison","John Adams","Alexander Hamilton"], c: 2, cat: "Founding Era" },
-  { q: "What document preceded the Constitution as the first governing document of the US?", a: ["The Mayflower Compact","The Bill of Rights","The Articles of Confederation","The Federalist Papers"], c: 2, cat: "Founding Era" },
-  { q: "Which battle is considered the turning point of the American Revolution?", a: ["Battle of Bunker Hill","Battle of Saratoga","Battle of Yorktown","Battle of Trenton"], c: 1, cat: "Founding Era" },
-  // Colonial America
-  { q: "The Pilgrims arrived in America on which ship?", a: ["Santa Maria","Mayflower","Pinta","Discovery"], c: 1, cat: "Colonial America" },
-  { q: "In what year did the Pilgrims land at Plymouth Rock?", a: ["1607","1612","1620","1630"], c: 2, cat: "Colonial America" },
-  { q: "Which was the first permanent English settlement in America?", a: ["Plymouth","Boston","Jamestown","Roanoke"], c: 2, cat: "Colonial America" },
-  { q: "The Boston Tea Party took place in which year?", a: ["1770","1773","1775","1776"], c: 1, cat: "Colonial America" },
-  { q: "What was the rallying cry of the American colonists against British taxation?", a: ["Give me liberty or give me death","No taxation without representation","Don't tread on me","United we stand"], c: 1, cat: "Colonial America" },
-  { q: "Which colonist said 'Give me liberty, or give me death!'?", a: ["Samuel Adams","John Hancock","Paul Revere","Patrick Henry"], c: 3, cat: "Colonial America" },
-  { q: "Paul Revere's midnight ride warned colonists that the British were coming to which towns?", a: ["Boston and Salem","Lexington and Concord","Plymouth and Providence","Hartford and New Haven"], c: 1, cat: "Colonial America" },
-  { q: "What was the name of the first representative assembly in colonial America?", a: ["Continental Congress","House of Burgesses","Mayflower Compact","Colonial Assembly"], c: 1, cat: "Colonial America" },
-  // Civil War
-  { q: "Which President issued the Emancipation Proclamation?", a: ["Ulysses S. Grant","Andrew Johnson","Abraham Lincoln","James Buchanan"], c: 2, cat: "Civil War" },
-  { q: "In what year did the American Civil War begin?", a: ["1858","1859","1860","1861"], c: 3, cat: "Civil War" },
-  { q: "Which Confederate general surrendered to end the Civil War?", a: ["Stonewall Jackson","Jefferson Davis","Robert E. Lee","James Longstreet"], c: 2, cat: "Civil War" },
-  { q: "Where did the Civil War's final major surrender take place?", a: ["Richmond, Virginia","Appomattox Court House","Gettysburg","Fort Sumter"], c: 1, cat: "Civil War" },
-  { q: "The Battle of Gettysburg took place in which state?", a: ["Virginia","Maryland","Pennsylvania","Ohio"], c: 2, cat: "Civil War" },
-  { q: "Who was the President of the Confederate States of America?", a: ["Robert E. Lee","Jefferson Davis","John C. Calhoun","Stonewall Jackson"], c: 1, cat: "Civil War" },
-  { q: "The Civil War began with an attack on which fort?", a: ["Fort Knox","Fort McHenry","Fort Sumter","Fort Ticonderoga"], c: 2, cat: "Civil War" },
-  { q: "Which amendment abolished slavery in the United States?", a: ["13th","14th","15th","16th"], c: 0, cat: "Civil War" },
-  { q: "The Gettysburg Address was delivered in which year?", a: ["1861","1862","1863","1864"], c: 2, cat: "Civil War" },
-  { q: "Which battle had the highest casualties of the entire Civil War?", a: ["Bull Run","Antietam","Gettysburg","Chickamauga"], c: 2, cat: "Civil War" },
-  // Presidents
-  { q: "Who was the 16th President of the United States?", a: ["Andrew Jackson","James Polk","Abraham Lincoln","Ulysses S. Grant"], c: 2, cat: "Presidents" },
-  { q: "Which President served the longest term in US history?", a: ["Woodrow Wilson","Harry Truman","Franklin D. Roosevelt","Dwight Eisenhower"], c: 2, cat: "Presidents" },
-  { q: "Who was the youngest person elected President of the United States?", a: ["Theodore Roosevelt","Bill Clinton","John F. Kennedy","Barack Obama"], c: 2, cat: "Presidents" },
-  { q: "Which President signed the Louisiana Purchase?", a: ["George Washington","John Adams","Thomas Jefferson","James Madison"], c: 2, cat: "Presidents" },
-  { q: "Who was the first Vice President to become President upon the death of the President?", a: ["John Tyler","Millard Fillmore","Andrew Johnson","Chester Arthur"], c: 0, cat: "Presidents" },
-  { q: "Which President is on the $100 bill?", a: ["Abraham Lincoln","George Washington","Benjamin Franklin","Alexander Hamilton"], c: 2, cat: "Presidents" },
-  { q: "Who was President during the Cuban Missile Crisis?", a: ["Dwight Eisenhower","John F. Kennedy","Lyndon B. Johnson","Richard Nixon"], c: 1, cat: "Presidents" },
-  { q: "Which President resigned from office?", a: ["Lyndon B. Johnson","Gerald Ford","Richard Nixon","Jimmy Carter"], c: 2, cat: "Presidents" },
-  { q: "Who was the first African-American President of the United States?", a: ["Jesse Jackson","Colin Powell","Barack Obama","Thurgood Marshall"], c: 2, cat: "Presidents" },
-  { q: "Which President delivered the 'New Deal' programs?", a: ["Woodrow Wilson","Herbert Hoover","Franklin D. Roosevelt","Harry Truman"], c: 2, cat: "Presidents" },
-  // Westward Expansion
-  { q: "What term described the belief that the US was destined to expand across the continent?", a: ["Expansionism","Manifest Destiny","Imperialism","Frontier Spirit"], c: 1, cat: "Westward Expansion" },
-  { q: "The Lewis and Clark Expedition set out in which year?", a: ["1800","1803","1804","1807"], c: 2, cat: "Westward Expansion" },
-  { q: "Gold was discovered in California in which year, sparking the Gold Rush?", a: ["1845","1848","1850","1853"], c: 1, cat: "Westward Expansion" },
-  { q: "The Louisiana Purchase more than doubled the size of the US. It was bought from which country?", a: ["Spain","Britain","France","Mexico"], c: 2, cat: "Westward Expansion" },
-  { q: "Which Native American leader led the Sioux at the Battle of Little Bighorn?", a: ["Geronimo","Sitting Bull","Crazy Horse","Red Cloud"], c: 1, cat: "Westward Expansion" },
-  { q: "The Transcontinental Railroad was completed in which year?", a: ["1865","1867","1869","1871"], c: 2, cat: "Westward Expansion" },
-  { q: "Alaska was purchased from which country in 1867?", a: ["Britain","Canada","Russia","Sweden"], c: 2, cat: "Westward Expansion" },
-  // World Wars
-  { q: "The US entered World War I in which year?", a: ["1914","1915","1916","1917"], c: 3, cat: "World Wars" },
-  { q: "The attack on Pearl Harbor occurred on what date?", a: ["December 7, 1941","December 7, 1942","September 1, 1941","November 11, 1941"], c: 0, cat: "World Wars" },
-  { q: "Which US general commanded Allied forces in Europe during World War II?", a: ["Douglas MacArthur","George Patton","Dwight Eisenhower","Omar Bradley"], c: 2, cat: "World Wars" },
-  { q: "The D-Day invasion took place on the beaches of which country?", a: ["Belgium","Netherlands","Germany","France"], c: 3, cat: "World Wars" },
-  { q: "The US dropped atomic bombs on which two Japanese cities?", a: ["Tokyo and Osaka","Hiroshima and Nagasaki","Kyoto and Hiroshima","Nagasaki and Tokyo"], c: 1, cat: "World Wars" },
-  { q: "Which US President ordered the use of atomic bombs on Japan?", a: ["Franklin D. Roosevelt","Harry Truman","Dwight Eisenhower","Herbert Hoover"], c: 1, cat: "World Wars" },
-  { q: "The US formally entered World War II after the attack on Pearl Harbor by which country?", a: ["Germany","Italy","Japan","Soviet Union"], c: 2, cat: "World Wars" },
-  // Civil Rights
-  { q: "Who delivered the famous 'I Have a Dream' speech?", a: ["Malcolm X","Thurgood Marshall","Martin Luther King Jr.","John Lewis"], c: 2, cat: "Civil Rights" },
-  { q: "In what year did the Civil Rights Act pass?", a: ["1961","1962","1963","1964"], c: 3, cat: "Civil Rights" },
-  { q: "Rosa Parks refused to give up her seat on a bus in which city?", a: ["Birmingham","Selma","Montgomery","Atlanta"], c: 2, cat: "Civil Rights" },
-  { q: "Which Supreme Court case declared racial segregation in schools unconstitutional?", a: ["Plessy v. Ferguson","Marbury v. Madison","Brown v. Board of Education","Roe v. Wade"], c: 2, cat: "Civil Rights" },
-  { q: "The Civil Rights March from Selma to Montgomery was also known as what?", a: ["Freedom Walk","Bloody Sunday March","The Long March","The Selma Campaign"], c: 1, cat: "Civil Rights" },
-  { q: "Which amendment gave African-American men the right to vote?", a: ["13th","14th","15th","19th"], c: 2, cat: "Civil Rights" },
-  { q: "Which amendment gave women the right to vote?", a: ["15th","17th","18th","19th"], c: 3, cat: "Civil Rights" },
-  // Cold War & Modern
-  { q: "The US and Soviet Union faced off in the Cuban Missile Crisis in which year?", a: ["1959","1960","1961","1962"], c: 3, cat: "Cold War" },
-  { q: "The Korean War ended in which year?", a: ["1951","1952","1953","1954"], c: 2, cat: "Cold War" },
-  { q: "The Vietnam War officially ended with the Fall of Saigon in which year?", a: ["1973","1974","1975","1976"], c: 2, cat: "Cold War" },
-  { q: "Which US President said 'Mr. Gorbachev, tear down this wall!'?", a: ["Jimmy Carter","Ronald Reagan","George H.W. Bush","Bill Clinton"], c: 1, cat: "Cold War" },
-  { q: "The US moon landing was part of which NASA program?", a: ["Mercury","Gemini","Apollo","Voyager"], c: 2, cat: "Space Race" },
-  { q: "Neil Armstrong landed on the Moon in which year?", a: ["1967","1968","1969","1970"], c: 2, cat: "Space Race" },
-  { q: "The September 11 attacks occurred in which year?", a: ["1999","2000","2001","2002"], c: 2, cat: "Modern History" },
-  { q: "Which war followed the September 11 attacks most directly?", a: ["Iraq War","Gulf War","War in Afghanistan","Vietnam War"], c: 2, cat: "Modern History" },
-  { q: "The US stock market crash that triggered the Great Depression occurred in which year?", a: ["1927","1928","1929","1930"], c: 2, cat: "Great Depression" },
-  { q: "Which President's New Deal programs aimed to address the Great Depression?", a: ["Herbert Hoover","Franklin D. Roosevelt","Harry Truman","Woodrow Wilson"], c: 1, cat: "Great Depression" },
-  // Geography & Government
-  { q: "How many states are in the United States?", a: ["48","49","50","52"], c: 2, cat: "American Geography" },
-  { q: "Which state was the last to be admitted to the Union?", a: ["Alaska","Hawaii","New Mexico","Arizona"], c: 1, cat: "American Geography" },
-  { q: "The capital of the United States is located in which district?", a: ["Maryland","Virginia","District of Columbia","Delaware"], c: 2, cat: "American Geography" },
-  { q: "How many senators does each US state have?", a: ["1","2","3","4"], c: 1, cat: "US Government" },
-  { q: "How many justices sit on the US Supreme Court?", a: ["7","8","9","11"], c: 2, cat: "US Government" },
-  { q: "The President of the United States serves a term of how many years?", a: ["2","3","4","5"], c: 2, cat: "US Government" },
-  { q: "Which branch of US government has the power to declare war?", a: ["Executive","Judicial","Legislative","Military"], c: 2, cat: "US Government" },
-  { q: "Who becomes President if both the President and Vice President are unable to serve?", a: ["Secretary of State","Speaker of the House","Senate Majority Leader","Chief Justice"], c: 1, cat: "US Government" },
-  { q: "The US Constitution was ratified in which year?", a: ["1785","1787","1788","1791"], c: 2, cat: "US Government" },
-  { q: "How many amendments does the US Constitution currently have?", a: ["20","25","27","30"], c: 2, cat: "US Government" },
-  // Inventions & Culture
-  { q: "Alexander Graham Bell is credited with inventing which device?", a: ["Telegraph","Telephone","Radio","Light bulb"], c: 1, cat: "American Inventions" },
-  { q: "The Wright Brothers made their first successful flight in which year?", a: ["1899","1901","1903","1905"], c: 2, cat: "American Inventions" },
-  { q: "Thomas Edison is credited with inventing a practical version of which device?", a: ["Telephone","Radio","Light bulb","Camera"], c: 2, cat: "American Inventions" },
-  { q: "Which American industrialist founded Ford Motor Company?", a: ["Andrew Carnegie","John D. Rockefeller","Henry Ford","J.P. Morgan"], c: 2, cat: "American Industry" },
-  { q: "The Erie Canal, connecting the Great Lakes to the Atlantic, opened in which year?", a: ["1815","1820","1825","1830"], c: 2, cat: "American Industry" },
-  // Native American History
-  { q: "The forced relocation of Native Americans in the 1830s is known as what?", a: ["The Long Walk","Trail of Tears","The Great Removal","Manifest Destiny"], c: 1, cat: "Native American History" },
-  { q: "Which act in 1830 authorized the removal of Native American tribes from eastern states?", a: ["Dawes Act","Indian Removal Act","Homestead Act","Indian Reorganization Act"], c: 1, cat: "Native American History" },
-  { q: "The Battle of Little Bighorn is also known as?", a: ["Custer's Folly","Sitting Bull's Revenge","Custer's Last Stand","The Great Sioux War"], c: 2, cat: "Native American History" },
-  // Immigration & Social History
-  { q: "Immigrants arriving in New York in the late 1800s were processed at which location?", a: ["Statue of Liberty","Battery Park","Ellis Island","Castle Garden"], c: 2, cat: "Immigration" },
-  { q: "The Statue of Liberty was a gift to the US from which country?", a: ["Britain","France","Italy","Spain"], c: 1, cat: "Immigration" },
-  { q: "Prohibition, banning alcohol, was established by which amendment?", a: ["16th","17th","18th","19th"], c: 2, cat: "Social History" },
-  { q: "The Great Migration refers to the movement of African Americans from the South to the North primarily in which decades?", a: ["1890s–1900s","1910s–1920s","1930s–1940s","1950s–1960s"], c: 1, cat: "Social History" },
-  // Spanish-American War & Imperialism
-  { q: "The Spanish-American War began in which year?", a: ["1895","1896","1897","1898"], c: 3, cat: "American Imperialism" },
-  { q: "As a result of the Spanish-American War, the US gained control of which island territories?", a: ["Cuba and Jamaica","Puerto Rico and Guam","Bahamas and Bermuda","Haiti and Dominican Republic"], c: 1, cat: "American Imperialism" },
-  { q: "The Monroe Doctrine, warning European powers against colonizing the Americas, was issued by which President?", a: ["Thomas Jefferson","John Quincy Adams","James Monroe","Andrew Jackson"], c: 2, cat: "American Foreign Policy" },
-  // Miscellaneous American History
-  { q: "Which war was fought between the US and Mexico from 1846 to 1848?", a: ["Spanish-American War","Texas Revolution","Mexican-American War","Civil War"], c: 2, cat: "American Wars" },
-  { q: "The Pony Express mail service operated between Missouri and which western city?", a: ["Denver","San Francisco","Salt Lake City","Sacramento"], c: 3, cat: "Westward Expansion" },
-  { q: "Which President was assassinated in Dallas, Texas in 1963?", a: ["Dwight Eisenhower","John F. Kennedy","Lyndon B. Johnson","Richard Nixon"], c: 1, cat: "Modern History" },
-  { q: "The Watergate scandal involved a break-in at which building?", a: ["The Capitol","The Pentagon","The Watergate Hotel & Office Complex","The White House"], c: 2, cat: "Modern History" },
-  { q: "Which US document begins with 'We the People'?", a: ["The Declaration of Independence","The Bill of Rights","The Federalist Papers","The Constitution"], c: 3, cat: "US Government" },
-  { q: "The Star-Spangled Banner was written after a battle during which war?", a: ["Revolutionary War","War of 1812","Mexican-American War","Civil War"], c: 1, cat: "American Culture" },
+// ===================== CONSTANTS =====================
+// Scoring: 1pt increments by round; 3rd place worth same as SF (4)
+const KO_POINTS = {r32:1, r16:2, qf:3, sf:4, final:5, champion:6, third:4};
+const ROUNDS = [
+  {id:'r32',   label:'Round of 32', n:16},
+  {id:'r16',   label:'Round of 16', n:8},
+  {id:'qf',    label:'Quarter-Finals', n:4},
+  {id:'sf',    label:'Semi-Finals', n:2},
+  {id:'final', label:'Final', n:1}
 ];
+function getNextRound(r){ return {r32:'r16',r16:'qf',qf:'sf',sf:'final',final:'champion'}[r]; }
 
-let scores = [0, 0];
-let currentPlayer = 0;
-let answered = false;
-let pool = [];
-let currentQ = null;
-
-function shuffle(arr) { return [...arr].sort(() => Math.random() - 0.5); }
-function getQ() {
-  if (!pool.length) pool = shuffle(questions);
-  return pool.pop();
-}
-
-// Canvas character drawing
-function drawFighter(canvasId, level, punching) {
-  const canvas = document.getElementById(canvasId);
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
-
-  const isP2 = canvasId === 'p2-canvas';
-  const colors = isP2
-    ? { body: '#EF4444', arm: '#B91C1C', skin: '#FCD34D', hair: '#1E3A5F', shoe: '#1E3A5F' }
-    : { body: '#3B82F6', arm: '#1D4ED8', skin: '#FCD34D', hair: '#92400E', shoe: '#92400E' };
-
-  const cx = W / 2;
-  const headY = 32, headR = 20;
-  const bodyTop = headY + headR, bodyH = 52;
-  const bodyBot = bodyTop + bodyH;
-  const legH = 42, legW = 12;
-  const armBaseY = bodyTop + 12;
-
-  const armThick = 8 + level * 6;
-  const upperL = 28 + level * 5;
-  const foreL = 22 + level * 4;
-  const fistR = 8 + level * 3;
-
-  // Legs
-  ctx.fillStyle = colors.body;
-  roundRect(ctx, cx - 14, bodyBot, legW, legH - 8, 5);
-  ctx.fill();
-  roundRect(ctx, cx + 2, bodyBot, legW, legH - 8, 5);
-  ctx.fill();
-  // Shoes
-  ctx.fillStyle = colors.shoe;
-  roundRect(ctx, cx - 17, bodyBot + legH - 12, 18, 10, 5);
-  ctx.fill();
-  roundRect(ctx, cx - 1, bodyBot + legH - 12, 18, 10, 5);
-  ctx.fill();
-
-  // Body
-  ctx.fillStyle = colors.body;
-  roundRect(ctx, cx - 18, bodyTop, 36, bodyH, 8);
-  ctx.fill();
-
-  // Arms
-  ctx.lineCap = 'round';
-  ctx.lineWidth = armThick;
-
-  if (punching) {
-    // Extend punch
-    ctx.strokeStyle = colors.arm;
-    ctx.beginPath();
-    ctx.moveTo(cx, armBaseY);
-    ctx.lineTo(cx + 55, armBaseY - 5);
-    ctx.stroke();
-    ctx.fillStyle = colors.skin;
-    ctx.beginPath();
-    ctx.arc(cx + 55 + fistR, armBaseY - 5, fistR, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    // Left arm (visible arm)
-    const elbowX = cx + upperL;
-    const elbowY = armBaseY + 20;
-    const fistX2 = elbowX - 4;
-    const fistY2 = elbowY + foreL * 0.4;
-    ctx.strokeStyle = colors.arm;
-    ctx.beginPath();
-    ctx.moveTo(cx, armBaseY);
-    ctx.lineTo(elbowX, elbowY);
-    ctx.stroke();
-    ctx.lineWidth = Math.max(armThick - 3, 6);
-    ctx.beginPath();
-    ctx.moveTo(elbowX, elbowY);
-    ctx.lineTo(fistX2, fistY2);
-    ctx.stroke();
-    ctx.fillStyle = colors.skin;
-    ctx.beginPath();
-    ctx.arc(fistX2, fistY2 + fistR, fistR, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Back arm (right side from character view)
-  ctx.lineWidth = Math.max(armThick - 2, 5);
-  ctx.strokeStyle = colors.body;
-  ctx.beginPath();
-  ctx.moveTo(cx - 4, armBaseY + 4);
-  ctx.lineTo(cx - upperL * 0.8, armBaseY + 22);
-  ctx.stroke();
-
-  // Head
-  ctx.fillStyle = colors.skin;
-  ctx.beginPath();
-  ctx.arc(cx, headY, headR, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Hair
-  ctx.fillStyle = colors.hair;
-  ctx.beginPath();
-  ctx.arc(cx, headY - 4, headR, Math.PI, 0);
-  ctx.fill();
-
-  // Eyes
-  ctx.fillStyle = '#1E293B';
-  ctx.beginPath(); ctx.arc(cx - 7, headY - 2, 2.5, 0, Math.PI * 2); ctx.fill();
-  ctx.beginPath(); ctx.arc(cx + 7, headY - 2, 2.5, 0, Math.PI * 2); ctx.fill();
-
-  // Smile
-  ctx.strokeStyle = '#7C3AED';
-  ctx.lineWidth = 1.8;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.arc(cx, headY + 4, 7, 0.2, Math.PI - 0.2);
-  ctx.stroke();
-
-  // Level badge
-  if (level > 0) {
-    ctx.fillStyle = level === MAX_LEVEL ? '#F59E0B' : (isP2 ? '#EF4444' : '#3B82F6');
-    ctx.font = 'bold 12px Nunito, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`LV ${level}`, cx, H - 4);
-  }
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-function updateUI() {
-  for (let i = 0; i < 2; i++) {
-    drawFighter(`p${i+1}-canvas`, scores[i], false);
-    document.getElementById(`p${i+1}-fill`).style.width = (scores[i] / MAX_LEVEL * 100) + '%';
-    document.getElementById(`p${i+1}-level`).textContent = `Level ${scores[i]} / ${MAX_LEVEL}`;
-  }
-  const pill = document.getElementById('turn-pill');
-  pill.textContent = `P${currentPlayer + 1} Turn`;
-  pill.style.background = currentPlayer === 0 ? 'rgba(59,130,246,0.2)' : 'rgba(239,68,68,0.2)';
-  pill.style.color = currentPlayer === 0 ? '#93C5FD' : '#FCA5A5';
-  pill.style.borderColor = currentPlayer === 0 ? 'rgba(59,130,246,0.4)' : 'rgba(239,68,68,0.4)';
-
-  document.getElementById('p1-fighter').classList.toggle('active-fighter', currentPlayer === 0);
-  document.getElementById('p2-fighter').classList.toggle('active-fighter', currentPlayer === 1);
-}
-
-function showQuestion() {
-  answered = false;
-  currentQ = getQ();
-  document.getElementById('q-category').textContent = currentQ.cat;
-  document.getElementById('q-text').textContent = currentQ.q;
-  const answersEl = document.getElementById('answers');
-  answersEl.innerHTML = '';
-  currentQ.a.forEach((a, i) => {
-    const btn = document.createElement('button');
-    btn.className = 'ans-btn';
-    btn.textContent = a;
-    btn.onclick = () => handleAnswer(i);
-    answersEl.appendChild(btn);
+// Remove any downstream winner that isn't actually present in its feeder match.
+// Fixes stale data when the R32 seeding changes (e.g. new bracket) but old R16+ winners linger.
+// `ko` must already have ko.r32 set to the current 32 teams. Mutates ko in place.
+function pruneInvalidPicks(ko) {
+  if (!ko) return;
+  const sizes = {r32:16,r16:8,qf:4,sf:2,final:1};
+  ['r32','r16','qf','sf','final'].forEach(rid => {
+    const teams = ko[rid] || [];
+    const nr = getNextRound(rid);
+    const n = sizes[rid];
+    for (let i=0;i<n;i++){
+      const t1 = teams[i*2], t2 = teams[i*2+1];
+      const valid = [t1,t2].filter(x => x && x!=='?');
+      if (nr === 'champion') {
+        if (ko.champion && !valid.includes(ko.champion)) ko.champion = '';
+      } else {
+        if (!ko[nr]) ko[nr] = [];
+        const w = ko[nr][i];
+        // a winner is only valid if it's one of this match's two (now-current) teams
+        if (w && !valid.includes(w)) ko[nr][i] = '';
+      }
+    }
   });
-  document.getElementById('feedback').textContent = '';
-  document.getElementById('next-btn').style.display = 'none';
-
-  const card = document.getElementById('q-card');
-  card.classList.remove('bounce');
-  void card.offsetWidth;
-  card.classList.add('bounce');
+  // 3rd place must be one of the two SF losers
+  const sfT = ko.sf||[], sfW = ko.final||[];
+  const l0 = sfW[0] ? (sfW[0]===sfT[0]?sfT[1]:sfT[0]) : '';
+  const l1 = sfW[1] ? (sfW[1]===sfT[2]?sfT[3]:sfT[2]) : '';
+  const tp = (ko.third_place||[])[0];
+  if (tp && tp!==l0 && tp!==l1) ko.third_place = [];
 }
 
-function handleAnswer(idx) {
-  if (answered) return;
-  answered = true;
-  const btns = document.querySelectorAll('.ans-btn');
-  btns.forEach(b => b.disabled = true);
-  const correct = idx === currentQ.c;
-  btns[idx].classList.add(correct ? 'correct' : 'wrong');
-  if (!correct) btns[currentQ.c].classList.add('correct');
+// Flag rendering via flagcdn images (works on all platforms). Maps team name -> ISO code.
+// Covers all 48 WC2026 teams so admin-entered names resolve to flags.
+const FLAG_MAP = {
+  "Mexico":"mx","South Korea":"kr","Korea Republic":"kr","South Africa":"za","Czechia":"cz","Czech Republic":"cz",
+  "Canada":"ca","Switzerland":"ch","Bosnia-Herz.":"ba","Bosnia and Herzegovina":"ba","Qatar":"qa",
+  "Brazil":"br","Morocco":"ma","Scotland":"gb-sct","Haiti":"ht",
+  "United States":"us","USA":"us","Australia":"au","Paraguay":"py","Turkiye":"tr","Turkey":"tr",
+  "Germany":"de","Ivory Coast":"ci","Cote d'Ivoire":"ci","Ecuador":"ec","Curacao":"cw",
+  "Netherlands":"nl","Japan":"jp","Sweden":"se","Tunisia":"tn",
+  "Belgium":"be","Egypt":"eg","Iran":"ir","New Zealand":"nz",
+  "Spain":"es","Uruguay":"uy","Saudi Arabia":"sa","Cape Verde":"cv","Cabo Verde":"cv",
+  "France":"fr","Senegal":"sn","Norway":"no","Iraq":"iq",
+  "Argentina":"ar","Algeria":"dz","Austria":"at","Jordan":"jo",
+  "Portugal":"pt","Colombia":"co","DR Congo":"cd","Congo DR":"cd","Uzbekistan":"uz",
+  "England":"gb-eng","Croatia":"hr","Ghana":"gh","Panama":"pa"
+};
+function flagImg(code) {
+  if (!code) return '<span style="display:inline-block;width:21px;height:15px;background:#2A2B38;border-radius:2px;vertical-align:middle;"></span>';
+  return '<img src="https://flagcdn.com/h20/'+code+'.png" width="21" height="15" loading="lazy" alt="" style="border-radius:2px;vertical-align:middle;object-fit:cover;">';
+}
+function teamFlag(teamName) {
+  if (!teamName || teamName==='?' || teamName==='TBD') return flagImg('');
+  return flagImg(FLAG_MAP[teamName] || '');
+}
 
-  const fb = document.getElementById('feedback');
-  if (correct) {
-    scores[currentPlayer]++;
-    fb.style.color = '#86EFAC';
-    fb.textContent = `✓ Correct! Player ${currentPlayer + 1}'s arms are GROWING! 💪`;
-    drawFighter(`p${currentPlayer + 1}-canvas`, scores[currentPlayer], false);
-    document.getElementById(`p${currentPlayer + 1}-fill`).style.width = (scores[currentPlayer] / MAX_LEVEL * 100) + '%';
-    document.getElementById(`p${currentPlayer + 1}-level`).textContent = `Level ${scores[currentPlayer]} / ${MAX_LEVEL}`;
+// ===================== STATE =====================
+let bracket = null;       // shared R32 seeding: { r32:[32 team names in 16 pairs], deadline:<ms timestamp or 0> }
+let pickDeadline = 0;     // ms timestamp; picks lock once now >= deadline (0 = no deadline set)
+let featuredPlayer = '';  // name of the player whose bracket the admin has featured (shown after champion entered)
+let results = { ko:{r32:[],r16:[],qf:[],sf:[],final:[],champion:"",third_place:[]} };
+let players = [];         // [{name}]
+let predictions = {};     // { playerName: predObj }
+let currentPlayer = null; // player name string
+let adminBracket = null;  // admin editing buffer for R32 teams
+let adminResults = null;  // admin editing buffer for results
+let saveTimer = null;
 
-    if (scores[currentPlayer] >= MAX_LEVEL) {
-      setTimeout(() => triggerWin(currentPlayer), 600);
+function emptyKO(){ return {r32:[],r16:[],qf:[],sf:[],final:[],champion:"",third_place:[]}; }
+function defaultPred(){ return { ko: emptyKO() }; }
+
+// Picks lock for EVERYONE (including admin) once the deadline (first R32 kickoff) passes.
+function isLocked(){ return pickDeadline > 0 && Date.now() >= pickDeadline; }
+function deadlineText(){
+  if (!pickDeadline) return '';
+  try { return new Date(pickDeadline).toLocaleString(); } catch(e){ return ''; }
+}
+
+function setSyncStatus(state, msg) {
+  const dot = document.getElementById('syncDot');
+  const txt = document.getElementById('syncMsg');
+  if (dot) dot.className = 'sync-dot ' + state;
+  if (txt) txt.textContent = msg;
+}
+
+// ===================== PLAYER MGMT =====================
+async function addPlayer() {
+  const input = document.getElementById('playerNameInput');
+  const name = (input.value||'').trim();
+  if (!name) return;
+  currentPlayer = name;
+  localStorage.setItem('wc_ko_myname_'+GROUP_CODE, name);
+  input.value = '';
+  setSyncStatus('saving','Loading your picks...');
+  try {
+    const saved = await window._fb.fbLoadPrediction(name);
+    if (saved && saved.ko) {
+      predictions[name] = { ko: Object.assign(emptyKO(), saved.ko) };
+      if (!predictions[name].ko.third_place) predictions[name].ko.third_place = [];
+      setSyncStatus('ok','Welcome back, '+name+'!');
+    } else {
+      predictions[name] = defaultPred();
+      setSyncStatus('ok','New player: '+name);
+    }
+  } catch(e) {
+    predictions[name] = defaultPred();
+    setSyncStatus('err','Could not load: '+e.message);
+  }
+  if (!players.find(p=>p.name===name)) players.push({name});
+  renderPlayerTabs();
+  renderBracket();
+}
+
+function switchPlayer(name) {
+  currentPlayer = name;
+  localStorage.setItem('wc_ko_myname_'+GROUP_CODE, name);
+  renderPlayerTabs();
+  renderBracket();
+}
+
+function scheduleSave() {
+  if (isLocked()) return; // never save changes after the deadline
+  setSyncStatus('saving','Saving...');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    if (isLocked()) return;
+    if (!currentPlayer || !predictions[currentPlayer]) return;
+    try {
+      await window._fb.fbSavePrediction(currentPlayer, { ko: predictions[currentPlayer].ko });
+      setSyncStatus('ok','Saved to cloud');
+    } catch(e) {
+      setSyncStatus('err','Save failed: '+e.message);
+    }
+  }, 800);
+}
+
+function renderPlayerTabs() {
+  const bar = document.getElementById('player-tabs-bar');
+  if (!currentPlayer) {
+    bar.innerHTML = '<span style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;font-size:0.85rem;letter-spacing:1px;">Enter your name above and tap Join to start</span>';
+    return;
+  }
+  bar.innerHTML = '<div class="player-tab active">&#128100; ' + currentPlayer + '</div>' +
+    '<span style="font-size:0.78rem;color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;">Your picks auto-save to the cloud</span>';
+}
+
+// ===================== TABS =====================
+function showTab(tabId, btn) {
+  if (tabId==='admin' && !isAdminMode()) return; // admin tab only in ?admin=1 mode
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-'+tabId).classList.add('active');
+  document.getElementById('player-tabs-bar').style.display = (tabId==='bracket') ? 'flex' : 'none';
+  if (tabId==='leaderboard') loadLeaderboard();
+  if (tabId==='admin') renderAdmin();
+  if (tabId==='bracket') renderBracket();
+  if (tabId==='featured') renderFeatured();
+  if (tabId==='results') renderResultsTab();
+}
+
+// Show the Winner's Bracket tab only when a player is featured AND the champion result is in.
+function updateFeaturedTabVisibility() {
+  const btn = document.getElementById('featured-tab-btn');
+  if (!btn) return;
+  const champEntered = !!(results.ko && results.ko.champion);
+  btn.style.display = (featuredPlayer && champEntered) ? '' : 'none';
+}
+
+// Show the Results tab as soon as any official result has been entered.
+function resultsHaveAny() {
+  const k = results.ko; if (!k) return false;
+  if (k.champion) return true;
+  if ((k.third_place||[])[0]) return true;
+  return ['r16','qf','sf','final'].some(r => (k[r]||[]).some(x => x));
+}
+function updateResultsTabVisibility() {
+  const btn = document.getElementById('results-tab-btn');
+  if (!btn) return;
+  btn.style.display = resultsHaveAny() ? '' : 'none';
+}
+
+// Render the official results as a read-only bracket for everyone.
+async function renderResultsTab() {
+  const container = document.getElementById('results-container');
+  if (!container) return;
+  container.innerHTML = '<div style="color:var(--muted);padding:16px;">Loading official results...</div>';
+  try {
+    // pull freshest results + bracket so members see live updates
+    const rData = await window._fb.fbLoadResults();
+    if (rData && rData.ko) results.ko = Object.assign(emptyKO(), rData.ko);
+    const bData = await window._fb.fbLoadBracket();
+    if (bData && bData.r32 && bData.r32.length===32) { bracket = { r32:bData.r32, deadline:bData.deadline||0 }; pickDeadline = bData.deadline||0; }
+    updateResultsTabVisibility();
+    if (!bracket || !bracket.r32 || bracket.r32.length!==32) {
+      container.innerHTML = '<div style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;padding:20px;text-align:center;background:var(--card);border:1px solid var(--border);border-radius:10px;">The bracket hasn\'t been set yet.</div>';
       return;
     }
-  } else {
-    fb.style.color = '#FCA5A5';
-    fb.textContent = `✗ Wrong! No gains this turn.`;
+    if (!resultsHaveAny()) {
+      container.innerHTML = '<div style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;padding:20px;text-align:center;background:var(--card);border:1px solid var(--border);border-radius:10px;">No official results yet. Check back as matches finish.</div>';
+      return;
+    }
+    // reuse the read-only renderer with the official results as the "prediction"
+    const resCopy = JSON.parse(JSON.stringify(results.ko));
+    container.innerHTML = buildReadOnlyBracket({ko:resCopy}, bracket.r32);
+  } catch(e) {
+    container.innerHTML = '<div style="color:#f87171;padding:16px;">Error loading results: '+e.message+'</div>';
   }
-  document.getElementById('next-btn').style.display = 'inline-block';
 }
 
-function triggerWin(winner) {
-  const loser = 1 - winner;
+// ===================== BRACKET RENDER (player picks) =====================
+function renderBracket() {
+  const container = document.getElementById('bracket-container');
+  if (!bracket || !bracket.r32 || bracket.r32.length !== 32) {
+    container.innerHTML = '<div style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;padding:20px;text-align:center;background:var(--card);border:1px solid var(--border);border-radius:10px;">The Round of 32 bracket has not been published yet.<br>Once the group stage ends, the admin will set the 32 teams and you can make your picks.</div>';
+    return;
+  }
+  if (!currentPlayer) {
+    container.innerHTML = '<div style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;padding:20px;text-align:center;background:var(--card);border:1px solid var(--border);border-radius:10px;">Enter your name and tap Join to make your bracket picks.</div>';
+    return;
+  }
+  const pred = predictions[currentPlayer];
+  if (!pred) return;
+  // Seed R32 from shared bracket
+  pred.ko.r32 = bracket.r32.slice();
+  if (!pred.ko.third_place) pred.ko.third_place = [];
 
-  drawFighter(`p${winner + 1}-canvas`, MAX_LEVEL, true);
+  const locked = isLocked();
+  // Before lock, clear any picks orphaned by a bracket change so the player can re-pick cleanly.
+  if (!locked) pruneInvalidPicks(pred.ko);
 
-  const loserFighter = document.getElementById(`p${loser + 1}-fighter`);
-  loserFighter.style.animation = loser === 0
-    ? 'flyAwayLeft 0.8s ease forwards'
-    : 'flyAway 0.8s ease forwards';
+  function getWinner(rid, i) {
+    const nr = getNextRound(rid);
+    if (nr === 'champion') return pred.ko.champion || '';
+    return (pred.ko[nr]||[])[i] || '';
+  }
+  function matchCard(rid, i, t1, t2) {
+    const w = getWinner(rid, i);
+    const e1 = (t1||'').replace(/'/g,"\\'"), e2 = (t2||'').replace(/'/g,"\\'");
+    const w1 = w&&w===t1?'winner':(w&&w!==t1?'loser':'');
+    const w2 = w&&w===t2?'winner':(w&&w!==t2?'loser':'');
+    const clickable = (!locked && t1&&t1!=='?'&&t2&&t2!=='?');
+    return '<div class="bk-match">'+
+      '<div class="bk-team '+w1+'" '+(clickable?'onclick="pickWinner(\''+rid+'\','+i+',\''+e1+'\')"':'')+'>'+teamFlag(t1)+'<span class="bk-team-name">'+(t1||'?')+'</span>'+(w===t1&&t1?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+      '<div class="bk-team '+w2+'" '+(clickable?'onclick="pickWinner(\''+rid+'\','+i+',\''+e2+'\')"':'')+'>'+teamFlag(t2)+'<span class="bk-team-name">'+(t2||'?')+'</span>'+(w===t2&&t2?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+      '</div>';
+  }
 
-  setTimeout(() => {
-    document.getElementById('game-wrap').style.display = 'none';
-    const ws = document.getElementById('win-screen');
-    ws.style.display = 'block';
-    document.getElementById('win-title').style.color = winner === 0 ? '#93C5FD' : '#FCA5A5';
-    document.getElementById('win-title').textContent = `Player ${winner + 1} Wins!`;
-    document.getElementById('win-desc').textContent =
-      `Player ${winner + 1} answered ${MAX_LEVEL} questions correctly and achieved LEGENDARY ARM SIZE! Player ${loser + 1} got punched into the stratosphere! 🚀`;
-  }, 900);
+  // Lock / deadline banner
+  let html = '';
+  if (locked) {
+    html += '<div style="background:rgba(200,16,46,0.12);border:1px solid var(--red);border-radius:8px;padding:11px 14px;margin-bottom:16px;font-family:\'Barlow Condensed\',sans-serif;font-size:0.9rem;color:#f87171;letter-spacing:0.5px;">&#128274; Picks are locked &mdash; the Round of 32 has started'+(deadlineText()?' (deadline was '+deadlineText()+')':'')+'. Your bracket is final.</div>';
+  } else if (pickDeadline) {
+    html += '<div style="background:rgba(245,197,24,0.1);border:1px solid var(--gold);border-radius:8px;padding:11px 14px;margin-bottom:16px;font-family:\'Barlow Condensed\',sans-serif;font-size:0.9rem;color:var(--gold);letter-spacing:0.5px;">&#9201; Picks lock at the first R32 kickoff: <strong>'+deadlineText()+'</strong>. Make sure your bracket is complete before then.</div>';
+  }
+
+  // Auto-pick button (fills only empty slots). Hidden once locked.
+  if (!locked) {
+    html += '<div style="margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'+
+      '<button class="btn btn-outline" onclick="autoPickRemaining()">&#127922; Auto-Pick Remaining</button>'+
+      '<span style="font-family:\'Barlow Condensed\',sans-serif;font-size:0.78rem;color:var(--muted);">Randomly fills any matchups you haven\'t picked yet &mdash; your existing picks stay.</span>'+
+      '</div>';
+  }
+
+  html += '<div class="bracket-wrap"><div class="bracket-tree">';
+  ROUNDS.forEach(round => {
+    const teams = pred.ko[round.id] || [];
+    html += '<div class="bracket-col round-'+round.id+'"><div class="bracket-col-label">'+round.label+'</div><div class="bracket-col-matches">';
+    for (let i=0;i<round.n;i++){
+      const t1=teams[i*2]||'?', t2=teams[i*2+1]||'?';
+      html += '<div class="bracket-slot">'+matchCard(round.id,i,t1,t2)+'</div>';
+    }
+    html += '</div></div>';
+  });
+  const champ = pred.ko.champion||'';
+  html += '<div class="bracket-col round-champ"><div class="bracket-col-label">Champion</div><div class="bracket-col-matches"><div class="bracket-slot"><div class="champion-box" style="width:100%;"><div class="champion-trophy">&#127942;</div><div class="champion-label">World Champion</div><div class="champion-name">'+(champ?teamFlag(champ)+' '+champ:'TBD')+'</div></div></div></div></div>';
+  html += '</div>';
+
+  // 3rd place match (losers of the two SFs)
+  const sfTeams = pred.ko.sf||[];
+  const sfWinners = pred.ko.final||[];
+  const l0 = sfWinners[0] ? (sfWinners[0]===sfTeams[0]?sfTeams[1]:sfTeams[0]) : '?';
+  const l1 = sfWinners[1] ? (sfWinners[1]===sfTeams[2]?sfTeams[3]:sfTeams[2]) : '?';
+  const tpw = (pred.ko.third_place||[])[0] || '';
+  const tpe0 = (l0||'').replace(/'/g,"\\'"), tpe1 = (l1||'').replace(/'/g,"\\'");
+  const clickable3 = (!locked && l0&&l0!=='?'&&l1&&l1!=='?');
+  html += '<div class="third-place-section"><div style="text-align:center;margin-bottom:10px;"><span class="third-place-label">&#129352; 3rd Place Match</span></div><div class="third-place-match">'+
+    '<div class="bk-team '+(tpw===l0&&l0?'winner':(tpw&&tpw!==l0?'loser':''))+'" '+(clickable3?'onclick="pickThird(\''+tpe0+'\')"':'')+'>'+teamFlag(l0)+'<span class="bk-team-name">'+(l0||'?')+'</span>'+(tpw===l0&&l0?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+    '<div class="bk-team '+(tpw===l1&&l1?'winner':(tpw&&tpw!==l1?'loser':''))+'" '+(clickable3?'onclick="pickThird(\''+tpe1+'\')"':'')+'>'+teamFlag(l1)+'<span class="bk-team-name">'+(l1||'?')+'</span>'+(tpw===l1&&l1?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+    '</div></div>';
+
+  container.innerHTML = html;
 }
 
-document.getElementById('next-btn').onclick = () => {
-  currentPlayer = 1 - currentPlayer;
-  updateUI();
-  showQuestion();
-};
+// Build a READ-ONLY bracket tree for any prediction object (used for the featured winner's bracket).
+// No click handlers, no lock logic - purely a display of someone's completed picks.
+function buildReadOnlyBracket(pred, seedR32) {
+  if (!pred || !pred.ko) return '<div style="color:var(--muted);padding:16px;">No picks found.</div>';
+  const ko = pred.ko;
+  ko.r32 = (seedR32 && seedR32.length===32) ? seedR32.slice() : (ko.r32||[]);
+  pruneInvalidPicks(ko); // drop any winners not valid against the current bracket
+  function getWinner(rid, i) {
+    const nr = getNextRound(rid);
+    if (nr === 'champion') return ko.champion || '';
+    return (ko[nr]||[])[i] || '';
+  }
+  function card(rid, i, t1, t2) {
+    const w = getWinner(rid, i);
+    const w1 = w&&w===t1?'winner':(w&&w!==t1?'loser':'');
+    const w2 = w&&w===t2?'winner':(w&&w!==t2?'loser':'');
+    return '<div class="bk-match">'+
+      '<div class="bk-team '+w1+'">'+teamFlag(t1)+'<span class="bk-team-name">'+(t1||'?')+'</span>'+(w===t1&&t1?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+      '<div class="bk-team '+w2+'">'+teamFlag(t2)+'<span class="bk-team-name">'+(t2||'?')+'</span>'+(w===t2&&t2?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+      '</div>';
+  }
+  let html = '<div class="bracket-wrap"><div class="bracket-tree">';
+  ROUNDS.forEach(round => {
+    const teams = ko[round.id] || [];
+    html += '<div class="bracket-col round-'+round.id+'"><div class="bracket-col-label">'+round.label+'</div><div class="bracket-col-matches">';
+    for (let i=0;i<round.n;i++){
+      const t1=teams[i*2]||'?', t2=teams[i*2+1]||'?';
+      html += '<div class="bracket-slot">'+card(round.id,i,t1,t2)+'</div>';
+    }
+    html += '</div></div>';
+  });
+  const champ = ko.champion||'';
+  html += '<div class="bracket-col round-champ"><div class="bracket-col-label">Champion</div><div class="bracket-col-matches"><div class="bracket-slot"><div class="champion-box" style="width:100%;"><div class="champion-trophy">&#127942;</div><div class="champion-label">World Champion</div><div class="champion-name">'+(champ?teamFlag(champ)+' '+champ:'TBD')+'</div></div></div></div></div>';
+  html += '</div>';
+  const sfT = ko.sf||[], sfW = ko.final||[];
+  const l0 = sfW[0] ? (sfW[0]===sfT[0]?sfT[1]:sfT[0]) : '?';
+  const l1 = sfW[1] ? (sfW[1]===sfT[2]?sfT[3]:sfT[2]) : '?';
+  const tpw = (ko.third_place||[])[0] || '';
+  html += '<div class="third-place-section"><div style="text-align:center;margin-bottom:10px;"><span class="third-place-label">&#129352; 3rd Place Match</span></div><div class="third-place-match">'+
+    '<div class="bk-team '+(tpw===l0&&l0?'winner':(tpw&&tpw!==l0?'loser':''))+'">'+teamFlag(l0)+'<span class="bk-team-name">'+(l0||'?')+'</span>'+(tpw===l0&&l0?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+    '<div class="bk-team '+(tpw===l1&&l1?'winner':(tpw&&tpw!==l1?'loser':''))+'">'+teamFlag(l1)+'<span class="bk-team-name">'+(l1||'?')+'</span>'+(tpw===l1&&l1?'<span class="bk-check">&#10003;</span>':'')+'</div>'+
+    '</div></div>';
+  return html;
+}
 
-document.getElementById('restart-btn').onclick = () => {
-  scores = [0, 0];
-  currentPlayer = 0;
-  pool = [];
-  document.getElementById('win-screen').style.display = 'none';
-  document.getElementById('game-wrap').style.display = 'block';
-  document.querySelectorAll('.fighter').forEach(f => { f.style.animation = ''; f.style.opacity = 1; });
-  updateUI();
-  showQuestion();
-};
+// Render the featured winner's bracket tab. Only visible once a champion result exists AND admin featured someone.
+async function renderFeatured() {
+  const container = document.getElementById('featured-container');
+  if (!container) return;
+  const champEntered = !!(results.ko && results.ko.champion);
+  if (!featuredPlayer || !champEntered) {
+    container.innerHTML = '<div style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;padding:20px;text-align:center;background:var(--card);border:1px solid var(--border);border-radius:10px;">The winner\'s bracket will appear here once the tournament finishes and the admin features it.</div>';
+    return;
+  }
+  container.innerHTML = '<div style="color:var(--muted);padding:16px;">Loading '+featuredPlayer+'\'s bracket...</div>';
+  try {
+    const saved = await window._fb.fbLoadPrediction(featuredPlayer);
+    if (!saved || !saved.ko) { container.innerHTML = '<div style="color:#f87171;padding:16px;">Could not load that bracket.</div>'; return; }
+    const score = calcScore({ko:saved.ko});
+    let html = '<div style="background:rgba(245,197,24,0.1);border:1px solid var(--gold);border-radius:8px;padding:13px 16px;margin-bottom:16px;font-family:\'Barlow Condensed\',sans-serif;">'+
+      '<span style="font-size:1.1rem;color:var(--gold);font-weight:700;letter-spacing:1px;">&#127942; '+featuredPlayer+'</span>'+
+      '<span style="color:var(--muted);font-size:0.85rem;margin-left:10px;">'+score.total+' points</span></div>';
+    html += buildReadOnlyBracket({ko:saved.ko}, bracket && bracket.r32);
+    container.innerHTML = html;
+  } catch(e) {
+    container.innerHTML = '<div style="color:#f87171;padding:16px;">Error: '+e.message+'</div>';
+  }
+}
 
-// Init
-pool = shuffle(questions);
-updateUI();
-showQuestion();
+// When a winner is picked, set it in the next round and clear any now-invalid downstream picks
+function pickWinner(rid, matchIdx, teamName) {
+  if (isLocked()) { setSyncStatus('err','Picks are locked - R32 has started'); return; }
+  const pred = predictions[currentPlayer];
+  if (!pred || !teamName || teamName==='?') return;
+  const nr = getNextRound(rid);
+  if (nr === 'champion') {
+    pred.ko.champion = teamName;
+  } else {
+    if (!pred.ko[nr]) pred.ko[nr] = [];
+    const prevPick = pred.ko[nr][matchIdx];
+    pred.ko[nr][matchIdx] = teamName;
+    if (prevPick && prevPick !== teamName) clearDownstream(pred, nr, prevPick);
+  }
+  scheduleSave();
+  renderBracket();
+}
+
+// Remove a team from all rounds at/after the given round (when it no longer advances)
+function clearDownstream(pred, roundId, teamName) {
+  let rid = roundId;
+  while (rid && rid !== 'champion') {
+    const arr = pred.ko[rid]||[];
+    for (let i=0;i<arr.length;i++) if (arr[i]===teamName) arr[i]='';
+    rid = getNextRound(rid);
+  }
+  if (pred.ko.champion === teamName) pred.ko.champion = '';
+  if ((pred.ko.third_place||[])[0] === teamName) pred.ko.third_place = [];
+}
+
+function pickThird(teamName) {
+  if (isLocked()) { setSyncStatus('err','Picks are locked - R32 has started'); return; }
+  const pred = predictions[currentPlayer];
+  if (!pred || !teamName || teamName==='?') return;
+  pred.ko.third_place = [teamName];
+  scheduleSave();
+  renderBracket();
+}
+
+// Auto-pick: randomly fill ONLY the empty slots through every round, keeping existing picks.
+// Processes rounds in order so winners cascade forward correctly.
+function autoPickRemaining() {
+  if (isLocked()) { setSyncStatus('err','Picks are locked - R32 has started'); return; }
+  const pred = predictions[currentPlayer];
+  if (!pred) return;
+  if (!bracket || !bracket.r32 || bracket.r32.length!==32) return;
+  pred.ko.r32 = bracket.r32.slice();
+  if (!pred.ko.third_place) pred.ko.third_place = [];
+  pruneInvalidPicks(pred.ko); // drop stale winners so they get re-filled, not kept
+
+  let filled = 0;
+  // Walk R32 -> Final. For each match, if both teams are known but no winner chosen, pick randomly.
+  ROUNDS.forEach(round => {
+    const teams = pred.ko[round.id] || [];
+    const nr = getNextRound(round.id);
+    for (let i=0;i<round.n;i++) {
+      const t1 = teams[i*2], t2 = teams[i*2+1];
+      if (!t1 || !t2 || t1==='?' || t2==='?') continue; // can't pick until both feeders are set
+      // current winner for this match
+      let cur;
+      if (nr === 'champion') cur = pred.ko.champion || '';
+      else cur = (pred.ko[nr]||[])[i] || '';
+      if (cur) continue; // already picked - keep it
+      const winner = Math.random()<0.5 ? t1 : t2;
+      if (nr === 'champion') pred.ko.champion = winner;
+      else { if(!pred.ko[nr]) pred.ko[nr]=[]; pred.ko[nr][i] = winner; }
+      filled++;
+    }
+  });
+  // 3rd place: fill if empty and both SF losers known
+  const sfTeams = pred.ko.sf||[], sfWinners = pred.ko.final||[];
+  const l0 = sfWinners[0] ? (sfWinners[0]===sfTeams[0]?sfTeams[1]:sfTeams[0]) : '';
+  const l1 = sfWinners[1] ? (sfWinners[1]===sfTeams[2]?sfTeams[3]:sfTeams[2]) : '';
+  if (l0 && l1 && !(pred.ko.third_place||[])[0]) {
+    pred.ko.third_place = [Math.random()<0.5 ? l0 : l1];
+    filled++;
+  }
+
+  scheduleSave();
+  renderBracket();
+  setSyncStatus('ok', filled>0 ? ('Auto-filled '+filled+' empty pick'+(filled===1?'':'s')) : 'Bracket already complete');
+}
+
+// ===================== SCORING =====================
+// Points for winning a round go to the team that ADVANCES from it.
+// Teams advancing out of R32 live in ko.r16, out of R16 in ko.qf, etc.
+// (ko.r32 is just the 32 seeded participants, so it is NOT scored directly.)
+function calcScore(pred) {
+  if (!pred || !pred.ko) return {total:0};
+  let pts = 0;
+  const advanceArr = { r32:'r16', r16:'qf', qf:'sf', sf:'final' };
+  Object.keys(advanceArr).forEach(rid => {
+    const pw = pred.ko[advanceArr[rid]] || [];
+    const rw = results.ko[advanceArr[rid]] || [];
+    pw.forEach(t => { if (t && rw.includes(t)) pts += KO_POINTS[rid]; });
+  });
+  // Final winner = champion: award both the Final-round points and the Champion bonus
+  if (pred.ko.champion && results.ko.champion && pred.ko.champion===results.ko.champion) pts += KO_POINTS.final + KO_POINTS.champion;
+  const pTp = (pred.ko.third_place||[])[0]||'';
+  const rTp = (results.ko.third_place||[])[0]||'';
+  if (pTp && rTp && pTp===rTp) pts += KO_POINTS.third;
+  return {total:pts};
+}
+
+// ===================== LEADERBOARD =====================
+async function loadLeaderboard() {
+  const cont = document.getElementById('leaderboard-list');
+  cont.innerHTML = '<p style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;">Loading...</p>';
+  try {
+    const resData = await window._fb.fbLoadResults();
+    if (resData && resData.ko) results.ko = Object.assign(emptyKO(), resData.ko);
+    try { const fData = await window._fb.fbLoadFeatured(); if (fData && typeof fData.featured === 'string') featuredPlayer = fData.featured; } catch(e){}
+    updateFeaturedTabVisibility();
+    updateResultsTabVisibility();
+    const all = await window._fb.fbLoadAllPredictions();
+    if (!all.length) { cont.innerHTML = '<p style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;">No players yet.</p>'; return; }
+    const scored = all.map(p => ({name:p.name, score:calcScore({ko:p.ko})}));
+    scored.sort((a,b)=>b.score.total-a.score.total);
+    const medals = ['&#129351;','&#129352;','&#129353;'];
+    cont.innerHTML = scored.map((p,i) =>
+      '<div class="lb-row rank-'+(i+1)+'">'+
+        '<div class="lb-rank">'+(i+1)+'</div>'+
+        '<div class="lb-medal">'+(medals[i]||'')+'</div>'+
+        '<div class="lb-name">'+p.name+(p.name===currentPlayer?' (you)':'')+'</div>'+
+        '<div class="lb-score-block"><div class="lb-total">'+p.score.total+'</div><div class="lb-breakdown">points</div></div>'+
+      '</div>'
+    ).join('');
+  } catch(e) {
+    cont.innerHTML = '<p style="color:#f87171;font-family:\'Barlow Condensed\',sans-serif;">Error loading leaderboard: '+e.message+'</p>';
+  }
+}
+
+// ===================== ADMIN =====================
+function saveApiKey(){ localStorage.setItem('wc_ko_apikey', (document.getElementById('apiKeyInput').value||'').trim()); }
+function loadApiKey(){ const k=localStorage.getItem('wc_ko_apikey')||''; const el=document.getElementById('apiKeyInput'); if(el) el.value=k; }
+
+function renderAdmin() {
+  loadApiKey();
+  // Global bracket/results setup is only available in the "main" group.
+  const isMain = (GROUP_CODE === 'main');
+  const mainOnly = document.getElementById('main-admin-only');
+  const note = document.getElementById('non-main-admin-note');
+  if (mainOnly) mainOnly.style.display = isMain ? '' : 'none';
+  if (note) note.style.display = isMain ? 'none' : '';
+  // init admin editing buffer from published bracket (or blanks)
+  if (!adminBracket) {
+    adminBracket = { r32: bracket && bracket.r32 && bracket.r32.length===32 ? bracket.r32.slice() : new Array(32).fill('') };
+  }
+  // populate deadline input from current deadline
+  const dEl = document.getElementById('deadlineInput');
+  if (dEl) dEl.value = pickDeadline ? msToLocalInput(pickDeadline) : '';
+  if (isMain) {
+    renderAdminR32Editor();
+    renderAdminResults();
+  }
+  loadFeatureOptions();
+}
+
+// Convert a ms timestamp to the value format datetime-local expects (local time, no TZ suffix).
+function msToLocalInput(ms) {
+  const d = new Date(ms);
+  const pad = n => String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+// ---- TEST HELPERS (for trying out functionality without the API) ----
+// Fill the 32 R32 slots with 32 real WC2026 qualified team names so you can test the full flow.
+function fillSampleTeams() {
+  // 32 teams drawn only from the actual 48 WC2026 qualifiers
+  const sample = [
+    "Netherlands","Japan","Mexico","South Korea",
+    "Brazil","Morocco","Germany","Ivory Coast",
+    "France","Senegal","Spain","Uruguay",
+    "Argentina","Algeria","Portugal","Colombia",
+    "England","Croatia","Belgium","Egypt",
+    "United States","Australia","Canada","Switzerland",
+    "Sweden","Ecuador","Norway","Austria",
+    "Iran","Paraguay","Ghana","Panama"
+  ];
+  if (!adminBracket) adminBracket = { r32: new Array(32).fill('') };
+  adminBracket.r32 = sample.slice();
+  renderAdminR32Editor();
+  const s = document.getElementById('fetch-bracket-status');
+  s.style.color = 'var(--green)';
+  s.textContent = 'Sample teams filled - click Publish to test';
+}
+
+// Randomly pick winners through every round of the RESULTS bracket (for testing scoring).
+function randomizeResults() {
+  if (!bracket || !bracket.r32 || bracket.r32.length!==32) {
+    const s=document.getElementById('fetch-results-status'); s.style.color='#f59e0b'; s.textContent='Publish a bracket first'; return;
+  }
+  adminResults = emptyKO();
+  adminResults.r32 = bracket.r32.slice();
+  // walk rounds, picking a random winner from each match's two teams
+  ['r32','r16','qf','sf','final'].forEach(rid => {
+    const src = adminResults[rid] || [];
+    const nr = getNextRound(rid);
+    const nMatches = src.length/2;
+    for (let i=0;i<nMatches;i++) {
+      const a = src[i*2], b = src[i*2+1];
+      if (!a || !b) continue;
+      const w = Math.random()<0.5 ? a : b;
+      if (nr==='champion') adminResults.champion = w;
+      else { if(!adminResults[nr]) adminResults[nr]=[]; adminResults[nr][i]=w; }
+    }
+  });
+  // 3rd place: a random one of the two SF losers
+  const sfT = adminResults.sf||[], sfW = adminResults.final||[];
+  const l0 = sfW[0]===sfT[0]?sfT[1]:sfT[0];
+  const l1 = sfW[1]===sfT[2]?sfT[3]:sfT[2];
+  if (l0 && l1) adminResults.third_place = [Math.random()<0.5?l0:l1];
+  renderAdminResults();
+  const s=document.getElementById('fetch-results-status'); s.style.color='var(--green)'; s.textContent='Random results generated - click Save Results to test scoring';
+}
+
+function clearResults() {
+  adminResults = emptyKO();
+  if (bracket && bracket.r32) adminResults.r32 = bracket.r32.slice();
+  renderAdminResults();
+  const s=document.getElementById('fetch-results-status'); s.style.color='var(--muted)'; s.textContent='Results cleared (not yet saved)';
+}
+
+// Step 1: editable 16 R32 matchups (8 text inputs per column = 32 teams)
+function renderAdminR32Editor() {
+  const el = document.getElementById('admin-r32-editor');
+  let html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:8px;">';
+  for (let i=0;i<16;i++) {
+    const t1 = adminBracket.r32[i*2]||'', t2 = adminBracket.r32[i*2+1]||'';
+    html += '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;">'+
+      '<div style="font-family:\'Barlow Condensed\',sans-serif;font-size:0.62rem;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:5px;">Match '+(i+1)+'</div>'+
+      '<input class="admin-input" style="width:100%;margin-bottom:4px;" placeholder="Team A" value="'+t1.replace(/"/g,'&quot;')+'" oninput="updateAdminR32('+(i*2)+',this.value)"/>'+
+      '<input class="admin-input" style="width:100%;" placeholder="Team B" value="'+t2.replace(/"/g,'&quot;')+'" oninput="updateAdminR32('+(i*2+1)+',this.value)"/>'+
+      '</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+}
+function updateAdminR32(idx, val){ adminBracket.r32[idx] = val.trim(); }
+
+async function publishBracket() {
+  const filled = adminBracket.r32.filter(t=>t && t.trim());
+  if (filled.length !== 32) {
+    document.getElementById('publish-status').textContent = 'Need all 32 teams ('+filled.length+'/32 filled)';
+    document.getElementById('publish-status').style.color = '#f87171';
+    return;
+  }
+  try {
+    // read deadline input (datetime-local -> ms). Empty = no lock (0).
+    const dEl = document.getElementById('deadlineInput');
+    let dl = 0;
+    if (dEl && dEl.value) { const t = new Date(dEl.value).getTime(); if (!isNaN(t)) dl = t; }
+    pickDeadline = dl;
+    await window._fb.fbSaveBracket({ r32: adminBracket.r32, deadline: dl });
+    bracket = { r32: adminBracket.r32.slice(), deadline: dl };
+    document.getElementById('publish-status').style.color = 'var(--green)';
+    document.getElementById('publish-status').textContent = dl ? ('Published! Picks lock at '+deadlineText()) : 'Published! (no lock set)';
+    renderAdminResults();
+  } catch(e) {
+    document.getElementById('publish-status').style.color = '#f87171';
+    document.getElementById('publish-status').textContent = 'Error: '+e.message;
+  }
+}
+
+// Step 2: results bracket - admin clicks actual winners
+function renderAdminResults() {
+  const el = document.getElementById('admin-results-bracket');
+  if (!bracket || !bracket.r32 || bracket.r32.length!==32) {
+    el.innerHTML = '<div style="color:var(--muted);font-family:\'Barlow Condensed\',sans-serif;padding:12px;">Publish the bracket first (Step 1), then enter results here.</div>';
+    return;
+  }
+  if (!adminResults) adminResults = Object.assign(emptyKO(), JSON.parse(JSON.stringify(results.ko||{})));
+  adminResults.r32 = bracket.r32.slice();
+  if (!adminResults.third_place) adminResults.third_place = [];
+  pruneInvalidPicks(adminResults); // clear any winners left over from a previous bracket
+
+  function getWinner(rid,i){ const nr=getNextRound(rid); if(nr==='champion')return adminResults.champion||''; return (adminResults[nr]||[])[i]||''; }
+  function card(rid,i,t1,t2){
+    const w=getWinner(rid,i);
+    const e1=(t1||'').replace(/'/g,"\\'"), e2=(t2||'').replace(/'/g,"\\'");
+    const clickable=(t1&&t1!=='?'&&t2&&t2!=='?');
+    return '<div class="bk-match">'+
+      '<div class="bk-team '+(w===t1&&t1?'winner':(w&&w!==t1?'loser':''))+'" '+(clickable?'onclick="setResult(\''+rid+'\','+i+',\''+e1+'\')"':'')+'>'+teamFlag(t1)+'<span class="bk-team-name">'+(t1||'?')+'</span></div>'+
+      '<div class="bk-team '+(w===t2&&t2?'winner':(w&&w!==t2?'loser':''))+'" '+(clickable?'onclick="setResult(\''+rid+'\','+i+',\''+e2+'\')"':'')+'>'+teamFlag(t2)+'<span class="bk-team-name">'+(t2||'?')+'</span></div>'+
+      '</div>';
+  }
+  let html='<div class="bracket-wrap"><div class="bracket-tree">';
+  ROUNDS.forEach(round=>{
+    const teams=adminResults[round.id]||[];
+    html+='<div class="bracket-col round-'+round.id+'"><div class="bracket-col-label">'+round.label+'</div><div class="bracket-col-matches">';
+    for(let i=0;i<round.n;i++){const t1=teams[i*2]||'?',t2=teams[i*2+1]||'?';html+='<div class="bracket-slot">'+card(round.id,i,t1,t2)+'</div>';}
+    html+='</div></div>';
+  });
+  const champ=adminResults.champion||'';
+  html+='<div class="bracket-col round-champ"><div class="bracket-col-label">Champion</div><div class="bracket-col-matches"><div class="bracket-slot"><div class="champion-box" style="width:100%;"><div class="champion-trophy">&#127942;</div><div class="champion-label">Champion</div><div class="champion-name">'+(champ?teamFlag(champ)+' '+champ:'TBD')+'</div></div></div></div></div>';
+  html+='</div>';
+  const sfT=adminResults.sf||[], sfW=adminResults.final||[];
+  const l0=sfW[0]?(sfW[0]===sfT[0]?sfT[1]:sfT[0]):'?';
+  const l1=sfW[1]?(sfW[1]===sfT[2]?sfT[3]:sfT[2]):'?';
+  const tpw=(adminResults.third_place||[])[0]||'';
+  const tpe0=(l0||'').replace(/'/g,"\\'"),tpe1=(l1||'').replace(/'/g,"\\'");
+  const c3=(l0&&l0!=='?'&&l1&&l1!=='?');
+  html+='<div class="third-place-section"><div style="text-align:center;margin-bottom:10px;"><span class="third-place-label">&#129352; 3rd Place Match</span></div><div class="third-place-match">'+
+    '<div class="bk-team '+(tpw===l0&&l0?'winner':(tpw&&tpw!==l0?'loser':''))+'" '+(c3?'onclick="setResultThird(\''+tpe0+'\')"':'')+'>'+teamFlag(l0)+'<span class="bk-team-name">'+(l0||'?')+'</span></div>'+
+    '<div class="bk-team '+(tpw===l1&&l1?'winner':(tpw&&tpw!==l1?'loser':''))+'" '+(c3?'onclick="setResultThird(\''+tpe1+'\')"':'')+'>'+teamFlag(l1)+'<span class="bk-team-name">'+(l1||'?')+'</span></div>'+
+    '</div></div>';
+  html+='<div style="margin-top:14px;"><button class="btn btn-gold" onclick="publishResults()">&#128228; Save Results</button> <span id="save-results-status" style="font-family:\'Barlow Condensed\',sans-serif;font-size:0.8rem;color:var(--green);"></span></div>';
+  el.innerHTML=html;
+}
+
+function setResult(rid, matchIdx, teamName) {
+  if (!teamName||teamName==='?') return;
+  const nr=getNextRound(rid);
+  if(nr==='champion'){ adminResults.champion=teamName; }
+  else {
+    if(!adminResults[nr]) adminResults[nr]=[];
+    const prev=adminResults[nr][matchIdx];
+    adminResults[nr][matchIdx]=teamName;
+    if(prev&&prev!==teamName){
+      let r=nr; while(r&&r!=='champion'){const a=adminResults[r]||[];for(let i=0;i<a.length;i++)if(a[i]===prev)a[i]='';r=getNextRound(r);}
+      if(adminResults.champion===prev)adminResults.champion='';
+      if((adminResults.third_place||[])[0]===prev)adminResults.third_place=[];
+    }
+  }
+  renderAdminResults();
+}
+function setResultThird(teamName){ if(!teamName||teamName==='?')return; adminResults.third_place=[teamName]; renderAdminResults(); }
+
+async function publishResults() {
+  try {
+    await window._fb.fbSaveResults({ ko: adminResults });
+    results.ko = Object.assign(emptyKO(), JSON.parse(JSON.stringify(adminResults)));
+    updateFeaturedTabVisibility();
+    updateResultsTabVisibility();
+    const s=document.getElementById('save-results-status'); s.style.color='var(--green)'; s.textContent='Saved! Scores updated for all groups.';
+  } catch(e) {
+    const s=document.getElementById('save-results-status'); s.style.color='#f87171'; s.textContent='Error: '+e.message;
+  }
+}
+
+// Populate the feature dropdown with all players in this group (by score, highest first).
+async function loadFeatureOptions() {
+  const sel = document.getElementById('featureSelect');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Loading players...</option>';
+  try {
+    const all = await window._fb.fbLoadAllPredictions();
+    if (!all.length) { sel.innerHTML = '<option value="">No players yet</option>'; return; }
+    const scored = all.map(p => ({name:p.name, score:calcScore({ko:p.ko}).total}));
+    scored.sort((a,b)=>b.score-a.score);
+    sel.innerHTML = '<option value="">-- choose a player --</option>' +
+      scored.map(p => '<option value="'+p.name.replace(/"/g,'&quot;')+'"'+(p.name===featuredPlayer?' selected':'')+'>'+p.name+' ('+p.score+' pts)</option>').join('');
+  } catch(e) {
+    sel.innerHTML = '<option value="">Error loading players</option>';
+  }
+}
+
+async function featureBracket() {
+  const sel = document.getElementById('featureSelect');
+  const name = sel ? sel.value : '';
+  const s = document.getElementById('feature-status');
+  if (!name) { s.style.color='#f59e0b'; s.textContent='Pick a player first'; return; }
+  if (!results.ko || !results.ko.champion) { s.style.color='#f59e0b'; s.textContent='Enter the Champion result first (Step 2) - the bracket stays hidden until then'; }
+  try {
+    featuredPlayer = name;
+    await window._fb.fbSaveFeatured(name);
+    updateFeaturedTabVisibility();
+    updateResultsTabVisibility();
+    s.style.color='var(--green)'; s.textContent = 'Featured ' + name + (results.ko && results.ko.champion ? ' - now visible to this group' : ' - will show once Champion is entered');
+  } catch(e) { s.style.color='#f87171'; s.textContent='Error: '+e.message; }
+}
+
+async function unfeatureBracket() {
+  const s = document.getElementById('feature-status');
+  try {
+    featuredPlayer = '';
+    await window._fb.fbSaveFeatured('');
+    updateFeaturedTabVisibility();
+    updateResultsTabVisibility();
+    const sel = document.getElementById('featureSelect'); if (sel) sel.value='';
+    s.style.color='var(--muted)'; s.textContent='Cleared - no bracket featured';
+  } catch(e) { s.style.color='#f87171'; s.textContent='Error: '+e.message; }
+}
+
+// ===================== API-FOOTBALL FETCH =====================
+// Maps API team names to our display names (reuse FLAG_MAP keys where they match)
+const API_NAME_FIX = {
+  "Korea Republic":"South Korea","Czech Republic":"Czechia","Bosnia and Herzegovina":"Bosnia-Herz.",
+  "USA":"United States","Turkey":"Turkiye","Cote d'Ivoire":"Ivory Coast","Cabo Verde":"Cape Verde",
+  "Congo DR":"DR Congo"
+};
+function fixName(n){ return API_NAME_FIX[n] || n; }
+
+// Fetch R32 fixtures. API-Football round label for this is "Round of 32".
+async function fetchR32Bracket() {
+  const key = (document.getElementById('apiKeyInput').value||'').trim();
+  const statusEl = document.getElementById('fetch-bracket-status');
+  if (!key) { statusEl.style.color='#f59e0b'; statusEl.textContent='Enter API key first'; return; }
+  const btn = document.getElementById('fetchBracketBtn');
+  btn.disabled=true; btn.textContent='Fetching...';
+  statusEl.style.color='var(--muted)'; statusEl.textContent='Contacting API...';
+  try {
+    const res = await fetch('https://v3.football.api-sports.io/fixtures?league=1&season=2026&round='+encodeURIComponent('Round of 32'), {
+      headers:{'x-apisports-key':key}, mode:'cors'
+    });
+    const data = await res.json();
+    if (data.errors && (data.errors.token||data.errors.requests||data.errors.plan)) {
+      statusEl.style.color='#f87171'; statusEl.textContent='API error: '+JSON.stringify(data.errors); btn.disabled=false; btn.textContent='\u26A1 Fetch R32 Matchups'; return;
+    }
+    const fixtures = data.response||[];
+    if (!fixtures.length) { statusEl.style.color='#f59e0b'; statusEl.textContent='No R32 fixtures yet (teams set after group stage)'; btn.disabled=false; btn.textContent='\u26A1 Fetch R32 Matchups'; return; }
+    // sort by fixture date/id for stable bracket order
+    fixtures.sort((a,b)=> new Date(a.fixture.date) - new Date(b.fixture.date));
+    const r32 = [];
+    fixtures.slice(0,16).forEach(fx => {
+      r32.push(fixName(fx.teams.home.name||''));
+      r32.push(fixName(fx.teams.away.name||''));
+    });
+    if (!adminBracket) adminBracket = {r32:new Array(32).fill('')};
+    adminBracket.r32 = r32.concat(new Array(Math.max(0,32-r32.length)).fill('')).slice(0,32);
+    renderAdminR32Editor();
+    statusEl.style.color='var(--green)'; statusEl.textContent='Loaded '+Math.min(fixtures.length,16)+' matchups - review then Publish';
+  } catch(e) {
+    statusEl.style.color='#f87171'; statusEl.textContent='Network error: '+e.message;
+  } finally { btn.disabled=false; btn.textContent='\u26A1 Fetch R32 Matchups'; }
+}
+
+// Fetch results for all knockout rounds and auto-fill the admin results bracket
+async function fetchKoResults() {
+  const key = (document.getElementById('apiKeyInput').value||'').trim();
+  const statusEl = document.getElementById('fetch-results-status');
+  if (!key) { statusEl.style.color='#f59e0b'; statusEl.textContent='Enter API key first (Step 1)'; return; }
+  if (!bracket || !bracket.r32) { statusEl.style.color='#f59e0b'; statusEl.textContent='Publish bracket first'; return; }
+  const btn=document.getElementById('fetchResultsBtn');
+  btn.disabled=true; btn.textContent='Fetching...';
+  statusEl.style.color='var(--muted)'; statusEl.textContent='Contacting API...';
+  const roundNames = {r32:'Round of 32', r16:'Round of 16', qf:'Quarter-finals', sf:'Semi-finals', final:'Final'};
+  try {
+    if (!adminResults) adminResults = Object.assign(emptyKO(), JSON.parse(JSON.stringify(results.ko||{})));
+    adminResults.r32 = bracket.r32.slice();
+    let totalWinners = 0;
+    for (const rid of ['r32','r16','qf','sf','final']) {
+      const res = await fetch('https://v3.football.api-sports.io/fixtures?league=1&season=2026&round='+encodeURIComponent(roundNames[rid]), { headers:{'x-apisports-key':key}, mode:'cors' });
+      const data = await res.json();
+      const fixtures = (data.response||[]).filter(fx => fx.fixture.status.short==='FT' || fx.fixture.status.short==='AET' || fx.fixture.status.short==='PEN');
+      fixtures.sort((a,b)=> new Date(a.fixture.date) - new Date(b.fixture.date));
+      const nr = getNextRound(rid);
+      fixtures.forEach((fx,idx) => {
+        let winner = '';
+        if (fx.teams.home.winner===true) winner=fixName(fx.teams.home.name);
+        else if (fx.teams.away.winner===true) winner=fixName(fx.teams.away.name);
+        if (!winner) return;
+        totalWinners++;
+        if (nr==='champion') { adminResults.champion=winner; }
+        else { if(!adminResults[nr]) adminResults[nr]=[]; adminResults[nr][idx]=winner; }
+      });
+    }
+    renderAdminResults();
+    statusEl.style.color='var(--green)'; statusEl.textContent='Loaded '+totalWinners+' results - review then Save';
+  } catch(e) {
+    statusEl.style.color='#f87171'; statusEl.textContent='Network error: '+e.message;
+  } finally { btn.disabled=false; btn.textContent='\u26A1 Fetch Results'; }
+}
+
+// ===================== BOOT =====================
+async function boot() {
+  const diag = document.getElementById('load-diag');
+  // Show which group this is, and reveal Admin tab only in admin mode (?admin=1)
+  const gl = document.getElementById('group-label');
+  if (gl) gl.textContent = 'Group: ' + GROUP_CODE;
+  if (isAdminMode()) {
+    const at = document.getElementById('admin-tab-btn');
+    if (at) at.style.display = '';
+  }
+  try {
+    diag.textContent = 'Loading bracket...';
+    const bData = await window._fb.fbLoadBracket();
+    if (bData && bData.r32 && bData.r32.length===32) {
+      bracket = { r32: bData.r32, deadline: bData.deadline || 0 };
+      pickDeadline = bData.deadline || 0;
+    }
+    diag.textContent = 'Loading results...';
+    const rData = await window._fb.fbLoadResults();
+    if (rData && rData.ko) results.ko = Object.assign(emptyKO(), rData.ko);
+    try { const fData = await window._fb.fbLoadFeatured(); if (fData && typeof fData.featured === 'string') featuredPlayer = fData.featured; } catch(e){}
+    // returning player?
+    const savedName = localStorage.getItem('wc_ko_myname_'+GROUP_CODE);
+    if (savedName) {
+      currentPlayer = savedName;
+      try {
+        const saved = await window._fb.fbLoadPrediction(savedName);
+        predictions[savedName] = saved && saved.ko ? { ko: Object.assign(emptyKO(), saved.ko) } : defaultPred();
+        if (!predictions[savedName].ko.third_place) predictions[savedName].ko.third_place=[];
+      } catch(e) { predictions[savedName] = defaultPred(); }
+      if (!players.find(p=>p.name===savedName)) players.push({name:savedName});
+    }
+    setSyncStatus('ok', bracket ? 'Connected - Group: '+GROUP_CODE : 'Connected - waiting for bracket');
+  } catch(e) {
+    setSyncStatus('err','Firebase error: '+e.message);
+    diag.textContent = 'Error: '+e.message+' (the app will still load)';
+    await new Promise(r=>setTimeout(r,2500));
+  }
+  document.getElementById('loading-overlay').style.display='none';
+  loadApiKey();
+  renderPlayerTabs();
+  renderBracket();
+  updateFeaturedTabVisibility();
+  updateResultsTabVisibility();
+
+  // Live lock: if a deadline is set and the page stays open, re-render once it passes
+  // so the bracket locks without needing a manual refresh.
+  let wasLocked = isLocked();
+  setInterval(() => {
+    const nowLocked = isLocked();
+    if (nowLocked !== wasLocked) {
+      wasLocked = nowLocked;
+      const activeTab = document.querySelector('.tab-panel.active');
+      if (activeTab && activeTab.id === 'tab-bracket') renderBracket();
+    }
+  }, 15000);
+}
+
+if (window._fbReady) boot();
+else document.addEventListener('fbReady', boot);
 </script>
 </body>
 </html>
